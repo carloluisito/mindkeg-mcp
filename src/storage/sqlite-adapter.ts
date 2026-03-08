@@ -341,11 +341,14 @@ export class SqliteAdapter implements StorageAdapter {
         RawLearningRow & { fts_score: number }
       >;
 
-      return rows.map((row) => ({
-        ...rowToLearning(row),
-        // Normalize BM25 (negative) to a [0, 1] relevance score
-        score: normalizeBm25Score(row.fts_score),
-      }));
+      return rows.map((row) => {
+        const learning = rowToLearning(row);
+        return {
+          ...learning,
+          score: normalizeBm25Score(row.fts_score),
+          scope: annotateScope(learning),
+        };
+      });
     } catch (err) {
       // Return empty on FTS5 query parse errors rather than crashing
       const msg = String(err);
@@ -379,7 +382,8 @@ export class SqliteAdapter implements StorageAdapter {
             : null;
           if (!embedding) return null;
           const score = cosineSimilarity(queryEmbedding, embedding);
-          return { ...rowToLearning(row), score };
+          const learning = rowToLearning(row);
+          return { ...learning, score, scope: annotateScope(learning) };
         })
         .filter((r): r is LearningWithScore => r !== null)
         .sort((a, b) => b.score - a.score)
@@ -562,6 +566,13 @@ function rowToLearning(row: RawLearningRow): Learning {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+/** Determine the scope of a learning based on its repository and workspace fields. */
+function annotateScope(learning: Learning): 'repo' | 'workspace' | 'global' {
+  if (learning.repository !== null) return 'repo';
+  if (learning.workspace !== null) return 'workspace';
+  return 'global';
 }
 
 function rowToApiKey(row: RawApiKeyRow): ApiKeyRecord {

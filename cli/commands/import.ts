@@ -17,6 +17,7 @@ interface ExportedLearning {
   category: string;
   tags?: string[];
   repository?: string | null;
+  workspace?: string | null;
   group_id?: string | null;
   source?: string;
   status?: string;
@@ -100,6 +101,7 @@ export function registerImportCommand(program: Command): void {
             category: parseResult.data.category,
             tags: parseResult.data.tags,
             repository: parseResult.data.repository,
+            workspace: parseResult.data.workspace ?? null,
             group_id: parseResult.data.group_id,
             source: parseResult.data.source,
             embedding: embeddingVector,

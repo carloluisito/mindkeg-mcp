@@ -1,6 +1,6 @@
 {
   "name": "mindkeg-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A persistent memory MCP server for AI coding agents — stores, searches, and retrieves atomic learnings per repository.",
   "type": "module",
   "engines": {

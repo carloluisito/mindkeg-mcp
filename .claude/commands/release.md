@@ -17,7 +17,17 @@ Follow these steps exactly:
 - Run `git log $(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD --oneline` to get all commits since the last tag.
 - If there are no commits since the last tag, stop and tell the user there's nothing to release.
 
-## 3. Update CHANGELOG.md
+## 3. Documentation check
+
+Before proceeding, verify that user-facing documentation is up to date with the changes being released:
+
+- Read `README.md` and check that any new CLI commands, features, configuration options, or API changes from the commits in step 2 are documented.
+- Check that the CLI Commands section, Quick Start section, and Configuration table reflect the current state.
+- Check that `CLAUDE.md` architecture section is consistent with any structural changes.
+- If documentation is missing or outdated, update it now and include the changes in the release commit.
+- Tell the user what documentation updates you made (if any). If everything is already documented, say so.
+
+## 4. Update CHANGELOG.md
 
 - Read the current `CHANGELOG.md`.
 - Add a new section at the top (below the header), formatted as:
@@ -42,12 +52,12 @@ Follow these steps exactly:
 - Write concise, user-facing descriptions (not raw commit messages). Group related commits.
 - Today's date should be used for the release date.
 
-## 4. Bump version in package.json
+## 5. Bump version in package.json
 
 - Update the `"version"` field in `package.json` to the new version.
 - Do NOT run `npm version` (it creates its own commit/tag which conflicts with our flow).
 
-## 5. Run checks
+## 6. Run checks
 
 - Run `npm run typecheck` — stop if it fails.
 - Run `npm run lint` — stop if it fails.
@@ -56,22 +66,23 @@ Follow these steps exactly:
 
 If any check fails, tell the user what failed and do NOT proceed with the commit/tag/push.
 
-## 6. Commit the release
+## 7. Commit the release
 
-- Stage only `package.json` and `CHANGELOG.md`.
+- Stage `package.json`, `CHANGELOG.md`, and any documentation files updated in step 3 (e.g., `README.md`, `CLAUDE.md`).
 - Commit with message: `release: vX.Y.Z`
 - Do NOT use `--no-verify`.
 
-## 7. Create the git tag
+## 8. Create the git tag
 
 - Run `git tag vX.Y.Z` to create a lightweight tag on the release commit.
 
-## 8. Push to GitHub
+## 9. Push to GitHub
 
 - Ask the user for confirmation before pushing.
 - Run `git push origin main --follow-tags` to push the commit and tag together.
+- If the tag was not pushed (check with `git ls-remote --tags origin vX.Y.Z`), push it explicitly with `git push origin vX.Y.Z`.
 
-## 9. Create GitHub release
+## 10. Create GitHub release
 
 - Run:
   ```
@@ -79,7 +90,7 @@ If any check fails, tell the user what failed and do NOT proceed with the commit
   ```
   where `changelog_section` is the new CHANGELOG section content you just wrote (the entries under `## [X.Y.Z]`, not the heading itself).
 
-## 10. Summary
+## 11. Summary
 
 Print a summary:
 - Version: X.Y.Z

@@ -17,7 +17,7 @@ It is designed to give AI agents persistent memory across sessions.
 
 ```
 CLI (Commander.js)
-  └── serve / api-key / migrate / export / import
+  └── init / stats / serve / api-key / migrate / export / import
 
 src/index.ts            Entry point, transport setup
 src/server.ts           MCP server, tool registration

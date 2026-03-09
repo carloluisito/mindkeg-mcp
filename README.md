@@ -35,13 +35,38 @@ Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre
 
 ## Quick Start
 
-### Install
+### One-command setup
+
+```bash
+npx mindkeg-mcp init
+```
+
+This auto-detects your agent (Claude Code, Cursor, Windsurf), writes the MCP config, copies agent instructions, and runs a health check. That's it — open your agent and start coding.
+
+**Options:**
+
+```bash
+npx mindkeg-mcp init --agent cursor      # Target a specific agent
+npx mindkeg-mcp init --no-instructions   # Skip copying AGENTS.md
+npx mindkeg-mcp init --no-health-check   # Skip the health check
+```
+
+`init` is idempotent — safe to run multiple times. It merges with existing configs and never overwrites.
+
+### Manual setup
+
+If you prefer to configure manually, or need HTTP mode:
+
+<details>
+<summary>Click to expand manual setup instructions</summary>
+
+#### Install
 
 ```bash
 npm install -g mindkeg-mcp
 ```
 
-### Create an API key
+#### Create an API key
 
 ```bash
 mindkeg api-key create --name "My Laptop"
@@ -49,13 +74,11 @@ mindkeg api-key create --name "My Laptop"
 # mk_abc123...
 ```
 
-### Connect your AI agent
+#### Connect your AI agent
 
 Mind Keg works with any MCP-compatible AI coding agent. Choose your setup:
 
-#### Claude Code (stdio)
-
-Add to `~/.claude.json` or your project's MCP settings:
+**Claude Code** — Add to `~/.claude.json` or your project's `.claude/mcp.json`:
 
 ```json
 {
@@ -71,9 +94,7 @@ Add to `~/.claude.json` or your project's MCP settings:
 }
 ```
 
-#### Cursor
-
-Add to your Cursor MCP settings (`.cursor/mcp.json` or global settings):
+**Cursor** — Add to `.cursor/mcp.json` or global settings:
 
 ```json
 {
@@ -89,9 +110,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json` or global settings):
 }
 ```
 
-#### Windsurf
-
-Add to your Windsurf MCP configuration (`~/.codeium/windsurf/mcp_config.json`):
+**Windsurf** — Add to `~/.codeium/windsurf/mcp_config.json`:
 
 ```json
 {
@@ -107,9 +126,7 @@ Add to your Windsurf MCP configuration (`~/.codeium/windsurf/mcp_config.json`):
 }
 ```
 
-#### HTTP mode (any MCP client)
-
-For agents that connect via HTTP instead of stdio:
+**HTTP mode (any MCP client):**
 
 ```bash
 MINDKEG_API_KEY=mk_your_key mindkeg serve --http
@@ -130,17 +147,17 @@ MINDKEG_API_KEY=mk_your_key mindkeg serve --http
 }
 ```
 
-#### Other MCP-compatible agents
+**Other MCP-compatible agents** — Mind Keg works with any agent that supports the [Model Context Protocol](https://modelcontextprotocol.io) — including Codex CLI, Gemini CLI, GitHub Copilot, and more. Use the stdio config above adapted to your agent's MCP settings format.
 
-Mind Keg works with any agent that supports the [Model Context Protocol](https://modelcontextprotocol.io) — including Codex CLI, Gemini CLI, GitHub Copilot, and more. Use the stdio config above adapted to your agent's MCP settings format.
-
-### Add Mind Keg instructions to your repository
+#### Add Mind Keg instructions to your repository
 
 Copy `templates/AGENTS.md` to the root of any repository where you want agents to use Mind Keg.
 
 `AGENTS.md` is the industry standard supported by 20+ AI tools (Cursor, Windsurf, Codex, Gemini CLI, GitHub Copilot, etc.).
 
 > **Claude Code only**: Claude Code doesn't auto-load `AGENTS.md` natively. Add `@AGENTS.md` to your `CLAUDE.md` to bridge it.
+
+</details>
 
 ## MCP Tools
 
@@ -158,6 +175,14 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 ## CLI Commands
 
 ```bash
+# Quick setup (auto-detects agent, writes config, copies instructions)
+mindkeg init
+mindkeg init --agent cursor
+
+# Database statistics
+mindkeg stats
+mindkeg stats --json
+
 # Start in stdio mode (for local agent connections)
 mindkeg serve --stdio
 
@@ -295,7 +320,7 @@ Mind Keg works fully offline by default. FastEmbed provides free, local semantic
 
 ```
 CLI (Commander.js)
-  └── serve / api-key / migrate / export / import
+  └── init / stats / serve / api-key / migrate / export / import
 
 src/
   index.ts          Entry point, stdio + HTTP transports

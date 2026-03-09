@@ -20,6 +20,7 @@ import type {
   ListAllFilters,
   CreateApiKeyRecord,
   ApiKeyRecord,
+  LearningStats,
 } from './storage-adapter.js';
 import type { Learning, LearningWithScore } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
@@ -511,6 +512,71 @@ export class SqliteAdapter implements StorageAdapter {
         .run(new Date().toISOString(), id);
     } catch (_err) {
       // Non-fatal — don't throw
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stats
+  // ---------------------------------------------------------------------------
+
+  async getStats(): Promise<LearningStats> {
+    try {
+      const rawTotals = this.db.prepare(`
+        SELECT
+          COUNT(*) AS total,
+          COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active,
+          COALESCE(SUM(CASE WHEN status = 'deprecated' THEN 1 ELSE 0 END), 0) AS deprecated,
+          COALESCE(SUM(CASE WHEN stale_flag = 1 THEN 1 ELSE 0 END), 0) AS stale,
+          COALESCE(SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END), 0) AS with_embeddings,
+          MIN(created_at) AS oldest_at,
+          MAX(created_at) AS newest_at
+        FROM learnings
+      `).get() as {
+        total: number;
+        active: number;
+        deprecated: number;
+        stale: number;
+        with_embeddings: number;
+        oldest_at: string | null;
+        newest_at: string | null;
+      };
+      const totals = rawTotals;
+
+      const byCategory = this.db.prepare(`
+        SELECT category, COUNT(*) AS count
+        FROM learnings
+        GROUP BY category
+        ORDER BY count DESC
+      `).all() as Array<{ category: string; count: number }>;
+
+      const byRepository = this.db.prepare(`
+        SELECT repository, COUNT(*) AS count
+        FROM learnings
+        GROUP BY repository
+        ORDER BY count DESC
+      `).all() as Array<{ repository: string | null; count: number }>;
+
+      const byWorkspace = this.db.prepare(`
+        SELECT workspace, COUNT(*) AS count
+        FROM learnings
+        GROUP BY workspace
+        ORDER BY count DESC
+      `).all() as Array<{ workspace: string | null; count: number }>;
+
+      return {
+        total: totals.total,
+        active: totals.active,
+        deprecated: totals.deprecated,
+        stale: totals.stale,
+        withEmbeddings: totals.with_embeddings,
+        byCategory,
+        byRepository,
+        byWorkspace,
+        oldestAt: totals.oldest_at,
+        newestAt: totals.newest_at,
+      };
+    } catch (err) {
+      throw new StorageError(`Failed to get stats: ${String(err)}`, err);
     }
   }
 }

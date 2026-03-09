@@ -156,4 +156,23 @@ export interface StorageAdapter {
 
   /** Update last_used_at timestamp on an API key. */
   touchApiKey(id: string): Promise<void>;
+
+  // --- Stats ---
+
+  /** Get aggregate statistics about the learnings database. */
+  getStats(): Promise<LearningStats>;
+}
+
+/** Aggregate statistics about the learnings database. */
+export interface LearningStats {
+  total: number;
+  active: number;
+  deprecated: number;
+  stale: number;
+  withEmbeddings: number;
+  byCategory: Array<{ category: string; count: number }>;
+  byRepository: Array<{ repository: string | null; count: number }>;
+  byWorkspace: Array<{ workspace: string | null; count: number }>;
+  oldestAt: string | null;
+  newestAt: string | null;
 }

@@ -12,6 +12,7 @@
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type {
   StorageAdapter,
   CreateLearningRecord,
@@ -21,6 +22,9 @@ import type {
   CreateApiKeyRecord,
   ApiKeyRecord,
   LearningStats,
+  GetContextFilters,
+  GetContextData,
+  DuplicateCandidate,
 } from './storage-adapter.js';
 import type { Learning, LearningWithScore } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
@@ -30,6 +34,10 @@ import {
   upStatements as migration001Statements,
   version as migration001Version,
 } from './migrations/001-initial.js';
+import {
+  upStatements as migration002Statements,
+  version as migration002Version,
+} from './migrations/002-duplicate-candidates.js';
 
 // ---------------------------------------------------------------------------
 // node:sqlite loader — lazy to avoid Vite/tsup resolution issues
@@ -79,6 +87,13 @@ function loadSqlite(): NodeSqliteModule {
     );
   }
 }
+
+/**
+ * Cosine similarity threshold above which two learnings are considered near-duplicates.
+ * Tunable: increase to be more selective, decrease to catch more near-duplicates.
+ * Traces to GC-AC-25.
+ */
+export const DUPLICATE_SIMILARITY_THRESHOLD = 0.92;
 
 export class SqliteAdapter implements StorageAdapter {
   private db!: DatabaseSyncInstance;
@@ -150,6 +165,24 @@ export class SqliteAdapter implements StorageAdapter {
         .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
         .run(migration001Version);
       log.info({ migration: migration001Version }, 'Migration 001-initial applied');
+    }
+
+    if (currentVersion < migration002Version) {
+      log.info({ migration: migration002Version }, 'Applying migration 002-duplicate-candidates');
+      for (const stmt of migration002Statements) {
+        try {
+          this.db.exec(stmt + ';');
+        } catch (err) {
+          const msg = String(err);
+          if (!msg.includes('already exists') && !msg.includes('duplicate')) {
+            throw new StorageError(`Migration failed on statement: ${stmt}\n${msg}`, err);
+          }
+        }
+      }
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
+        .run(migration002Version);
+      log.info({ migration: migration002Version }, 'Migration 002-duplicate-candidates applied');
     }
   }
 
@@ -579,6 +612,253 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to get stats: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // get_context: getContextLearnings (GC-AC-4, GC-AC-5)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch all active learnings partitioned by scope for get_context.
+   * Returns three arrays (repo, workspace, global) plus a stale array and summary counts.
+   * Handles empty database gracefully (GC-AC-29a).
+   */
+  async getContextLearnings(filters: GetContextFilters): Promise<GetContextData> {
+    try {
+      const staleCondition = filters.include_stale ? '' : 'AND stale_flag = 0';
+
+      // Repo-scoped: learnings with matching repository value
+      const repoRows = this.db
+        .prepare(
+          `SELECT * FROM learnings
+           WHERE repository = ? AND status = 'active' ${staleCondition}
+           ORDER BY updated_at DESC`
+        )
+        .all(filters.repository) as RawLearningRow[];
+
+      // Workspace-scoped: learnings with matching workspace, no repository
+      const wsRows = filters.workspace
+        ? (this.db
+            .prepare(
+              `SELECT * FROM learnings
+               WHERE workspace = ? AND repository IS NULL AND status = 'active' ${staleCondition}
+               ORDER BY updated_at DESC`
+            )
+            .all(filters.workspace) as RawLearningRow[])
+        : [];
+
+      // Global: both repository and workspace are null
+      const globalRows = this.db
+        .prepare(
+          `SELECT * FROM learnings
+           WHERE repository IS NULL AND workspace IS NULL AND status = 'active' ${staleCondition}
+           ORDER BY updated_at DESC`
+        )
+        .all() as RawLearningRow[];
+
+      // Stale: stale-flagged active learnings across all matching scopes
+      // Always fetched regardless of include_stale (GC-AC-22)
+      const staleConditionParts: string[] = ["status = 'active'", 'stale_flag = 1'];
+      const staleParams: unknown[] = [];
+
+      // Scope restriction for stale: only include learnings that would appear in our scope
+      if (filters.workspace) {
+        staleConditionParts.push(
+          '(repository = ? OR workspace = ? OR (repository IS NULL AND workspace IS NULL))'
+        );
+        staleParams.push(filters.repository, filters.workspace);
+      } else {
+        staleConditionParts.push('(repository = ? OR (repository IS NULL AND workspace IS NULL))');
+        staleParams.push(filters.repository);
+      }
+
+      const staleRows = this.db
+        .prepare(
+          `SELECT * FROM learnings
+           WHERE ${staleConditionParts.join(' AND ')}
+           ORDER BY updated_at DESC`
+        )
+        .all(...staleParams) as RawLearningRow[];
+
+      // Summary counts (total counts, regardless of include_stale setting)
+      const totalRepoRow = this.db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM learnings WHERE repository = ? AND status = 'active'`
+        )
+        .get(filters.repository) as { cnt: number };
+
+      const totalWsRow = filters.workspace
+        ? (this.db
+            .prepare(
+              `SELECT COUNT(*) AS cnt FROM learnings WHERE workspace = ? AND repository IS NULL AND status = 'active'`
+            )
+            .get(filters.workspace) as { cnt: number })
+        : { cnt: 0 };
+
+      const totalGlobalRow = this.db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM learnings WHERE repository IS NULL AND workspace IS NULL AND status = 'active'`
+        )
+        .get() as { cnt: number };
+
+      // staleConditionParts and staleParams are reused here unchanged from the staleRows query above;
+      // neither array was mutated between the two usages, so the join is identical and safe.
+      const staleCountRow = this.db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM learnings WHERE ${staleConditionParts.join(' AND ')}`
+        )
+        .get(...staleParams) as { cnt: number };
+
+      // last_updated: most recent updated_at across all matching learnings
+      const allRows = [...repoRows, ...wsRows, ...globalRows];
+      const lastUpdated =
+        allRows.length > 0
+          ? allRows.reduce((max, r) => (r.updated_at > max ? r.updated_at : max), allRows[0]!.updated_at)
+          : '';
+
+      return {
+        repo: repoRows.map(rowToLearning),
+        workspace: wsRows.map(rowToLearning),
+        global: globalRows.map(rowToLearning),
+        stale: staleRows.map(rowToLearning),
+        summary: {
+          total_repo: totalRepoRow.cnt,
+          total_workspace: totalWsRow.cnt,
+          total_global: totalGlobalRow.cnt,
+          stale_count: staleCountRow.cnt,
+          last_updated: lastUpdated,
+        },
+      };
+    } catch (err) {
+      throw new StorageError(`Failed to get context learnings: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // get_context: getDuplicateCandidates (GC-AC-26)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch all duplicate_candidates rows involving any of the given learning IDs.
+   * Returns an empty array if learningIds is empty.
+   */
+  async getDuplicateCandidates(learningIds: string[]): Promise<DuplicateCandidate[]> {
+    if (learningIds.length === 0) return [];
+    try {
+      const placeholders = learningIds.map(() => '?').join(', ');
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM duplicate_candidates
+           WHERE learning_id_a IN (${placeholders}) OR learning_id_b IN (${placeholders})
+           ORDER BY similarity DESC`
+        )
+        .all(...learningIds, ...learningIds) as RawDuplicateCandidateRow[];
+      return rows.map(rowToDuplicateCandidate);
+    } catch (err) {
+      throw new StorageError(`Failed to get duplicate candidates: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // get_context: checkAndStoreDuplicates (GC-AC-25)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Compare a learning against others in the same scope and store near-duplicate pairs
+   * above the DUPLICATE_SIMILARITY_THRESHOLD. Also removes any existing pairs that
+   * are now below threshold (content changed). Traces to GC-AC-25.
+   */
+  async checkAndStoreDuplicates(
+    learningId: string,
+    embedding: number[],
+    scope: { repository: string | null; workspace: string | null }
+  ): Promise<void> {
+    try {
+      // Determine scope and fetch same-scope learnings with embeddings
+      let scopeLabel: 'repo' | 'workspace' | 'global';
+      let scopeValue: string | null;
+      let candidates: RawLearningRow[];
+
+      if (scope.repository !== null) {
+        scopeLabel = 'repo';
+        scopeValue = scope.repository;
+        candidates = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE repository = ? AND id != ? AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all(scope.repository, learningId) as RawLearningRow[];
+      } else if (scope.workspace !== null) {
+        scopeLabel = 'workspace';
+        scopeValue = scope.workspace;
+        candidates = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE workspace = ? AND repository IS NULL AND id != ? AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all(scope.workspace, learningId) as RawLearningRow[];
+      } else {
+        scopeLabel = 'global';
+        scopeValue = null;
+        candidates = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE repository IS NULL AND workspace IS NULL AND id != ? AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all(learningId) as RawLearningRow[];
+      }
+
+      // Remove existing duplicate_candidates for this learning (will re-add below if still above threshold)
+      this.db
+        .prepare(
+          `DELETE FROM duplicate_candidates WHERE learning_id_a = ? OR learning_id_b = ?`
+        )
+        .run(learningId, learningId);
+
+      // Compare against each candidate and store pairs above threshold
+      for (const candidate of candidates) {
+        if (!candidate.embedding) continue;
+        const candidateEmbedding = JSON.parse(candidate.embedding) as number[];
+        const similarity = cosineSimilarity(embedding, candidateEmbedding);
+
+        if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
+          // Normalize ordering: smaller ID first
+          const idA = learningId < candidate.id ? learningId : candidate.id;
+          const idB = learningId < candidate.id ? candidate.id : learningId;
+
+          this.db
+            .prepare(
+              `INSERT OR REPLACE INTO duplicate_candidates
+               (id, learning_id_a, learning_id_b, similarity, scope, scope_value, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+            )
+            .run(randomUUID(), idA, idB, similarity, scopeLabel, scopeValue);
+        }
+      }
+    } catch (err) {
+      throw new StorageError(`Failed to check and store duplicates: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // get_context: cleanupDuplicateCandidates (GC-AC-27)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Remove all duplicate_candidates rows that reference the given learning ID.
+   * Called on deprecate and delete as belt-and-suspenders safety (ON DELETE CASCADE
+   * handles the delete case automatically, but we call this explicitly). Traces to GC-AC-27.
+   */
+  async cleanupDuplicateCandidates(learningId: string): Promise<void> {
+    try {
+      this.db
+        .prepare(
+          `DELETE FROM duplicate_candidates WHERE learning_id_a = ? OR learning_id_b = ?`
+        )
+        .run(learningId, learningId);
+    } catch (err) {
+      throw new StorageError(`Failed to cleanup duplicate candidates: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +890,16 @@ interface RawApiKeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked: number;
+}
+
+interface RawDuplicateCandidateRow {
+  id: string;
+  learning_id_a: string;
+  learning_id_b: string;
+  similarity: number;
+  scope: string;
+  scope_value: string | null;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +941,18 @@ function rowToApiKey(row: RawApiKeyRow): ApiKeyRecord {
     created_at: row.created_at,
     last_used_at: row.last_used_at,
     revoked: row.revoked === 1,
+  };
+}
+
+function rowToDuplicateCandidate(row: RawDuplicateCandidateRow): DuplicateCandidate {
+  return {
+    id: row.id,
+    learning_id_a: row.learning_id_a,
+    learning_id_b: row.learning_id_b,
+    similarity: row.similarity,
+    scope: row.scope as DuplicateCandidate['scope'],
+    scope_value: row.scope_value,
+    created_at: row.created_at,
   };
 }
 

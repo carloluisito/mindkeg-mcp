@@ -55,6 +55,10 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     revokeApiKey: vi.fn().mockResolvedValue(false),
     touchApiKey: vi.fn().mockResolvedValue(undefined),
     getStats: vi.fn().mockResolvedValue({ total: 0, active: 0, deprecated: 0, stale: 0, withEmbeddings: 0, byCategory: [], byRepository: [], byWorkspace: [], oldestAt: null, newestAt: null }),
+    getContextLearnings: vi.fn().mockResolvedValue({ repo: [], workspace: [], global: [], stale: [], summary: { total_repo: 0, total_workspace: 0, total_global: 0, stale_count: 0, last_updated: '' } }),
+    getDuplicateCandidates: vi.fn().mockResolvedValue([]),
+    checkAndStoreDuplicates: vi.fn().mockResolvedValue(undefined),
+    cleanupDuplicateCandidates: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

@@ -6,6 +6,55 @@
 import type { Learning, LearningWithScore } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 
+/**
+ * Filters for get_context queries. Traces to GC-AC-4.
+ */
+export interface GetContextFilters {
+  /** The current repository path (normalized). */
+  repository: string;
+  /** Workspace path (derived or provided). Null means no workspace scoping. */
+  workspace: string | null;
+  /** When false, stale learnings are excluded from main scope arrays. */
+  include_stale: boolean;
+}
+
+/**
+ * Data returned by getContextLearnings — learnings pre-partitioned by scope.
+ * Traces to GC-AC-4, GC-AC-5.
+ */
+export interface GetContextData {
+  /** Learnings where repository matches filter. */
+  repo: Learning[];
+  /** Learnings where workspace matches filter and repository is null. */
+  workspace: Learning[];
+  /** Learnings where both repository and workspace are null. */
+  global: Learning[];
+  /** Stale-flagged learnings across all matched scopes. */
+  stale: Learning[];
+  summary: {
+    total_repo: number;
+    total_workspace: number;
+    total_global: number;
+    stale_count: number;
+    /** Most recent updated_at across all matched learnings. Empty string if no learnings. */
+    last_updated: string;
+  };
+}
+
+/**
+ * A pre-computed near-duplicate pair in the duplicate_candidates table.
+ * Traces to GC-AC-24, GC-AC-26.
+ */
+export interface DuplicateCandidate {
+  id: string;
+  learning_id_a: string;
+  learning_id_b: string;
+  similarity: number;
+  scope: 'repo' | 'workspace' | 'global';
+  scope_value: string | null;
+  created_at: string;
+}
+
 /** Input for creating a new learning in storage (already validated by LearningService). */
 export interface CreateLearningRecord {
   id: string;
@@ -161,6 +210,37 @@ export interface StorageAdapter {
 
   /** Get aggregate statistics about the learnings database. */
   getStats(): Promise<LearningStats>;
+
+  // --- Context (get_context tool) ---
+
+  /**
+   * Fetch all active learnings partitioned by scope (repo, workspace, global) with summary counts.
+   * Used exclusively by the get_context tool. Traces to GC-AC-4, GC-AC-5.
+   */
+  getContextLearnings(filters: GetContextFilters): Promise<GetContextData>;
+
+  /**
+   * Fetch duplicate candidate rows involving any of the given learning IDs.
+   * Used by get_context to populate the near_duplicates section. Traces to GC-AC-26.
+   */
+  getDuplicateCandidates(learningIds: string[]): Promise<DuplicateCandidate[]>;
+
+  /**
+   * Compare a learning against others in the same scope and store pairs above the
+   * DUPLICATE_SIMILARITY_THRESHOLD. Called after store/update when content changes.
+   * Traces to GC-AC-25.
+   */
+  checkAndStoreDuplicates(
+    learningId: string,
+    embedding: number[],
+    scope: { repository: string | null; workspace: string | null }
+  ): Promise<void>;
+
+  /**
+   * Remove all duplicate_candidates rows that reference the given learning ID.
+   * Called on deprecate and delete. Traces to GC-AC-27.
+   */
+  cleanupDuplicateCandidates(learningId: string): Promise<void>;
 }
 
 /** Aggregate statistics about the learnings database. */

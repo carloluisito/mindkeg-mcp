@@ -182,3 +182,105 @@ export const FlagStaleLearningInputSchema = z.object({
 });
 
 export type FlagStaleLearningInput = z.infer<typeof FlagStaleLearningInputSchema>;
+
+/**
+ * Zod schema for get_context tool input.
+ * Traces to GC-AC-2, GC-AC-3, GC-AC-12, GC-AC-16, GC-AC-19, GC-AC-21.
+ */
+export const GetContextInputSchema = z.object({
+  /**
+   * The current repository path. Required. Used for repo-scope lookup and
+   * workspace auto-derivation (GC-AC-2, GC-AC-3).
+   */
+  repository: z.string().min(1, 'repository must not be empty'),
+
+  /**
+   * Workspace path override. When omitted, derived from repository's parent
+   * directory via deriveWorkspace(). (GC-AC-3)
+   */
+  workspace: z.string().optional(),
+
+  /**
+   * Optional subdirectory hint for path-match boosting. (GC-AC-16)
+   */
+  path_hint: z.string().optional(),
+
+  /**
+   * Optional topic focus. When provided, its embedding is used as an additional
+   * ranking signal (cosine similarity boost). (GC-AC-19)
+   */
+  query: z.string().optional(),
+
+  /**
+   * Budget preset controlling approximate character limits.
+   * compact ~2000, standard ~5000, full ~12000. Default: 'standard'. (GC-AC-12)
+   */
+  budget: z.enum(['compact', 'standard', 'full']).default('standard'),
+
+  /**
+   * When true (default), stale-flagged learnings appear in both the main scope arrays
+   * (repo/workspace/global) AND in the stale_review section.
+   * When false, stale learnings are excluded from the main scope arrays but still
+   * appear in the stale_review section. (GC-AC-21)
+   */
+  include_stale: z.boolean().default(true),
+});
+
+export type GetContextInput = z.infer<typeof GetContextInputSchema>;
+
+/**
+ * A learning as returned by get_context — identical to Learning but without
+ * the embedding vector (not returned to clients). Traces to architecture spec.
+ */
+export interface RankedLearning {
+  id: string;
+  content: string;
+  category: LearningCategory;
+  tags: string[];
+  repository: string | null;
+  workspace: string | null;
+  group_id: string | null;
+  source: string;
+  status: LearningStatus;
+  stale_flag: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * A group of near-duplicate learnings surfaced by get_context.
+ * Traces to GC-AC-26.
+ */
+export interface DuplicateGroup {
+  /** The older learning in the pair (by created_at). */
+  canonical_id: string;
+  /** Newer learnings that are near-duplicates of the canonical. */
+  duplicate_ids: string[];
+  /** Highest similarity score in the group. */
+  similarity: number;
+}
+
+/**
+ * The full response structure returned by the get_context tool.
+ * Traces to GC-AC-4, GC-AC-5, GC-AC-22, GC-AC-26.
+ */
+export interface GetContextResult {
+  summary: {
+    total_repo: number;
+    total_workspace: number;
+    total_global: number;
+    stale_count: number;
+    /** Most recent updated_at across all matched learnings. Empty string if no learnings. */
+    last_updated: string;
+  };
+  /** Repo-scoped learnings, ranked by actionability. */
+  repo_learnings: RankedLearning[];
+  /** Workspace-scoped learnings, ranked by actionability. */
+  workspace_learnings: RankedLearning[];
+  /** Global learnings, ranked by actionability. */
+  global_learnings: RankedLearning[];
+  /** Stale-flagged learnings for agent review (GC-AC-22). */
+  stale_review: RankedLearning[];
+  /** Near-duplicate groups, if any (GC-AC-26). */
+  near_duplicates?: DuplicateGroup[];
+}

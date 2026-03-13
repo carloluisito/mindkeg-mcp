@@ -17,7 +17,7 @@ import { registerDedupScanCommand } from './commands/dedup-scan.js';
 program
   .name('mindkeg')
   .description('Mind Keg MCP — persistent memory for AI coding agents')
-  .version('0.2.0');
+  .version('0.3.0');
 
 registerServeCommand(program);
 registerApiKeyCommand(program);

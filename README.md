@@ -163,6 +163,7 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 
 | Tool                 | Description                                          |
 |----------------------|------------------------------------------------------|
+| `get_context`        | Prime an agent session with all relevant learnings — ranked, scoped, and budget-controlled |
 | `store_learning`     | Store a new atomic learning (repo, workspace, or global scope) |
 | `search_learnings`   | Semantic/keyword search for relevant learnings       |
 | `update_learning`    | Update content, category, or tags                    |
@@ -197,6 +198,10 @@ mindkeg api-key revoke <prefix>
 
 # Database
 mindkeg migrate
+
+# Near-duplicate detection (backfill existing learnings)
+mindkeg dedup-scan
+mindkeg dedup-scan --dry-run
 
 # Backup and restore
 mindkeg export --output backup.json
@@ -320,14 +325,14 @@ Mind Keg works fully offline by default. FastEmbed provides free, local semantic
 
 ```
 CLI (Commander.js)
-  └── init / stats / serve / api-key / migrate / export / import
+  └── init / stats / serve / api-key / migrate / export / import / dedup-scan
 
 src/
   index.ts          Entry point, stdio + HTTP transports
   server.ts         MCP server + tool registration
   config.ts         Config loading (env vars → defaults)
   auth/             API key generation + validation middleware
-  tools/            One file per MCP tool (8 tools)
+  tools/            One file per MCP tool (9 tools)
   services/         LearningService + EmbeddingService
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types

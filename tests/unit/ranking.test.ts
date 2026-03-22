@@ -102,19 +102,18 @@ describe('rankLearnings: category tier (GC-AC-6)', () => {
 // ---------------------------------------------------------------------------
 
 describe('rankLearnings: stale flag (GC-AC-7)', () => {
-  it('stale learnings bubble to top within their category tier', () => {
-    const learnings = [
-      makeLearning({ category: 'conventions', stale_flag: false }),
-      makeLearning({ category: 'conventions', stale_flag: true }),
-      makeLearning({ category: 'conventions', stale_flag: false }),
-    ];
-    const ranked = rankLearnings(learnings);
-    expect(ranked[0]!.stale_flag).toBe(true);
+  it('in normal mode fresh learnings (staleness_score=0.0) rank before stale ones (staleness_score=1.0)', () => {
+    const fresh1 = makeLearning({ category: 'conventions', stale_flag: false, staleness_score: 0.0 });
+    const stale = makeLearning({ category: 'conventions', stale_flag: true, staleness_score: 1.0 });
+    const fresh2 = makeLearning({ category: 'conventions', stale_flag: false, staleness_score: 0.0 });
+    const ranked = rankLearnings([fresh1, stale, fresh2]);
+    // In normal mode: fresh (0.0) ranks first, stale (1.0) ranks last within tier
+    expect(ranked[2]!.stale_flag).toBe(true);
   });
 
   it('stale learning does not jump tiers (gotcha without stale still beats conventions stale)', () => {
-    const gotcha = makeLearning({ category: 'gotchas', stale_flag: false });
-    const staleConvention = makeLearning({ category: 'conventions', stale_flag: true });
+    const gotcha = makeLearning({ category: 'gotchas', stale_flag: false, staleness_score: 0.0 });
+    const staleConvention = makeLearning({ category: 'conventions', stale_flag: true, staleness_score: 1.0 });
     const ranked = rankLearnings([staleConvention, gotcha]);
     expect(ranked[0]!.category).toBe('gotchas');
   });
@@ -270,5 +269,160 @@ describe('rankLearnings: edge cases', () => {
   it('handles learnings with no options gracefully', () => {
     const learnings = [makeLearning(), makeLearning()];
     expect(() => rankLearnings(learnings)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// staleness_score continuous sort (SKM-AC-37)
+// ---------------------------------------------------------------------------
+
+describe('rankLearnings: staleness_score continuous sort (SKM-AC-37)', () => {
+  it('lower staleness_score ranks first in normal mode (0.0 = fresh, sorts before 0.8)', () => {
+    const fresh = makeLearning({ category: 'conventions', staleness_score: 0.0 });
+    const stale = makeLearning({ category: 'conventions', staleness_score: 0.8 });
+    const ranked = rankLearnings([stale, fresh]);
+    expect(ranked[0]!.id).toBe(fresh.id);
+  });
+
+  it('staleness_score 0.5 ranks between 0.0 and 1.0 in normal mode', () => {
+    const fresh = makeLearning({ category: 'conventions', staleness_score: 0.0 });
+    const medium = makeLearning({ category: 'conventions', staleness_score: 0.5 });
+    const stale = makeLearning({ category: 'conventions', staleness_score: 1.0 });
+    const ranked = rankLearnings([stale, fresh, medium]);
+    expect(ranked[0]!.id).toBe(fresh.id);
+    expect(ranked[1]!.id).toBe(medium.id);
+    expect(ranked[2]!.id).toBe(stale.id);
+  });
+
+  it('staleness_score does not override category tier', () => {
+    const freshConvention = makeLearning({ category: 'conventions', staleness_score: 0.0 });
+    const staleGotcha = makeLearning({ category: 'gotchas', staleness_score: 1.0 });
+    // gotchas is tier 0 — must rank above conventions even when stale
+    const ranked = rankLearnings([freshConvention, staleGotcha]);
+    expect(ranked[0]!.category).toBe('gotchas');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stale_review_mode inverts staleness sort (SKM-AC-37)
+// ---------------------------------------------------------------------------
+
+describe('rankLearnings: stale_review_mode (SKM-AC-37)', () => {
+  it('higher staleness_score sorts first in stale_review_mode', () => {
+    const fresh = makeLearning({ category: 'conventions', staleness_score: 0.1 });
+    const veryStale = makeLearning({ category: 'conventions', staleness_score: 0.9 });
+    const ranked = rankLearnings([fresh, veryStale], { stale_review_mode: true });
+    expect(ranked[0]!.id).toBe(veryStale.id);
+  });
+
+  it('stale_review_mode: items ordered 1.0 > 0.5 > 0.0', () => {
+    const fresh = makeLearning({ category: 'conventions', staleness_score: 0.0 });
+    const medium = makeLearning({ category: 'conventions', staleness_score: 0.5 });
+    const stale = makeLearning({ category: 'conventions', staleness_score: 1.0 });
+    const ranked = rankLearnings([fresh, medium, stale], { stale_review_mode: true });
+    expect(ranked[0]!.id).toBe(stale.id);
+    expect(ranked[1]!.id).toBe(medium.id);
+    expect(ranked[2]!.id).toBe(fresh.id);
+  });
+
+  it('stale_review_mode: false (default) keeps fresh-first order', () => {
+    const fresh = makeLearning({ category: 'conventions', staleness_score: 0.0 });
+    const stale = makeLearning({ category: 'conventions', staleness_score: 1.0 });
+    const ranked = rankLearnings([stale, fresh], { stale_review_mode: false });
+    expect(ranked[0]!.id).toBe(fresh.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// access_count frequency boost (SKM-AC-12)
+// ---------------------------------------------------------------------------
+
+describe('rankLearnings: access_count frequency boost (SKM-AC-12)', () => {
+  it('higher access_count ranks first within same tier', () => {
+    const lowAccess = makeLearning({ category: 'conventions', access_count: 1 });
+    const highAccess = makeLearning({ category: 'conventions', access_count: 50 });
+    const ranked = rankLearnings([lowAccess, highAccess]);
+    expect(ranked[0]!.id).toBe(highAccess.id);
+  });
+
+  it('access_count does not override category tier', () => {
+    const highAccessArch = makeLearning({ category: 'architecture', access_count: 100 });
+    const noAccessGotcha = makeLearning({ category: 'gotchas', access_count: 0 });
+    // gotchas (tier 0) must rank above architecture (tier 2) regardless of access
+    const ranked = rankLearnings([highAccessArch, noAccessGotcha]);
+    expect(ranked[0]!.category).toBe('gotchas');
+  });
+
+  it('access_count does not override staleness_score', () => {
+    // fresh learning with zero accesses vs stale learning with many accesses
+    const freshNoAccess = makeLearning({ category: 'conventions', staleness_score: 0.0, access_count: 0 });
+    const staleHighAccess = makeLearning({ category: 'conventions', staleness_score: 0.8, access_count: 100 });
+    // fresh (lower staleness) should rank first in normal mode
+    const ranked = rankLearnings([staleHighAccess, freshNoAccess]);
+    expect(ranked[0]!.id).toBe(freshNoAccess.id);
+  });
+
+  it('zero access_count items rank after non-zero access_count items', () => {
+    const neverAccessed = makeLearning({ category: 'conventions', access_count: 0 });
+    const accessed = makeLearning({ category: 'conventions', access_count: 5 });
+    const ranked = rankLearnings([neverAccessed, accessed]);
+    expect(ranked[0]!.id).toBe(accessed.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// access recency sort key (SKM-AC-13)
+// ---------------------------------------------------------------------------
+
+describe('rankLearnings: access recency (SKM-AC-13)', () => {
+  it('more recently accessed learning ranks first within same tier', () => {
+    const olderAccess = makeLearning({
+      category: 'conventions',
+      access_count: 1,
+      last_accessed_at: '2023-01-01T00:00:00.000Z',
+    });
+    const newerAccess = makeLearning({
+      category: 'conventions',
+      access_count: 1,
+      last_accessed_at: '2024-06-01T00:00:00.000Z',
+    });
+    const ranked = rankLearnings([olderAccess, newerAccess]);
+    expect(ranked[0]!.id).toBe(newerAccess.id);
+  });
+
+  it('falls back to created_at when last_accessed_at is null', () => {
+    // learning with null last_accessed_at but recent created_at
+    const neverAccessedRecent = makeLearning({
+      category: 'conventions',
+      access_count: 0,
+      last_accessed_at: null,
+      created_at: '2024-06-01T00:00:00.000Z',
+    });
+    // learning with null last_accessed_at and old created_at
+    const neverAccessedOld = makeLearning({
+      category: 'conventions',
+      access_count: 0,
+      last_accessed_at: null,
+      created_at: '2020-01-01T00:00:00.000Z',
+    });
+    const ranked = rankLearnings([neverAccessedOld, neverAccessedRecent]);
+    expect(ranked[0]!.id).toBe(neverAccessedRecent.id);
+  });
+
+  it('access recency does not override category tier', () => {
+    const recentlyAccessedArch = makeLearning({
+      category: 'architecture',
+      access_count: 10,
+      last_accessed_at: '2024-12-01T00:00:00.000Z',
+    });
+    const neverAccessedGotcha = makeLearning({
+      category: 'gotchas',
+      access_count: 0,
+      last_accessed_at: null,
+      created_at: '2020-01-01T00:00:00.000Z',
+    });
+    // gotchas (tier 0) must rank above architecture (tier 2) regardless of recency
+    const ranked = rankLearnings([recentlyAccessedArch, neverAccessedGotcha]);
+    expect(ranked[0]!.category).toBe('gotchas');
   });
 });

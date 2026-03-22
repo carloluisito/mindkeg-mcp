@@ -658,12 +658,16 @@ export class LearningService {
       : rankedGlobal.slice(0, VOLUME_RANKED_CAP);
 
     // 9. Apply budget trimming — final gate (GC-AC-12 through GC-AC-15a)
+    // Rank stale learnings with stale_review_mode: true so highest staleness_score surfaces first
+    // (SKM-AC-37)
+    const rankedStale = rankLearnings(contextData.stale, { stale_review_mode: true });
+
     const trimmed = applyBudget(
       {
         repo: volumeRepo,
         workspace: volumeWorkspace,
         global: volumeGlobal,
-        stale: contextData.stale,
+        stale: rankedStale,
       },
       input.budget as BudgetPreset
     );

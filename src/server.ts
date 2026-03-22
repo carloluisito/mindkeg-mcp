@@ -40,7 +40,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   const server = new McpServer(
     {
       name: 'mindkeg-mcp',
-      version: '0.3.0',
+      version: '0.5.0',
     },
     {
       capabilities: {

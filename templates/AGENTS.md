@@ -72,7 +72,7 @@ Wait for the user's answer before calling `store_learning`. If the user provides
 
 Then use `store_learning` with the chosen scope. Always include:
 - `repository` OR `workspace` (not both) — or omit both for global learnings
-- `category`: one of `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`
+- `category`: one of `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions` — optional; omit to trigger auto-categorization (requires an embedding provider)
 - `tags`: relevant keywords for searchability
 - `source`: your agent name (e.g., `"claude-code"`, `"cursor"`, `"windsurf"`, `"codex-cli"`)
 
@@ -98,8 +98,13 @@ Use `repository` for repo-specific learnings, `workspace` for workspace-wide lea
 ```
 
 **Optional parameters:**
+- `category`: One of `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`. If omitted, the server auto-categorizes using KNN voting on the 5 nearest neighbor learnings. Requires an embedding provider — omitting category with `MINDKEG_EMBEDDING_PROVIDER=none` returns a validation error.
 - `source_agent`: Your agent name (e.g., `"claude-code"`, `"cursor"`). Used for provenance tracking — records which agent authored the learning.
 - `ttl_days`: Integer. Per-learning time-to-live in days. Overrides the global `MINDKEG_DEFAULT_TTL_DAYS` setting. Omit for no per-learning expiry.
+
+**Response fields:**
+- `auto_categorized`: Boolean. `true` if the server inferred the category rather than using an explicitly provided value.
+- `conflicts`: Array of conflict objects detected at store time. Each entry has `learning_id`, `content`, `similarity`, and `conflict_type: "keyword_heuristic"`. Review conflicts — they are keyword-heuristic detections and may include false positives.
 
 Workspace-scoped example (applies to all repos under `/path/to/workspace/`):
 
@@ -137,6 +142,12 @@ Search for relevant learnings. Each scope requires its own search call:
 
 **Optional parameter:**
 - `verify_integrity`: Boolean (default `false`). When `true`, each result includes an `integrity_valid` field: `true` (hash matches), `false` (content may have been tampered), or `null` (legacy learning with no stored hash). Use this when you suspect memory poisoning or database corruption.
+
+**Response fields on each result:**
+- `access_count`: Integer. How many times this learning has been returned by search or get_context.
+- `last_accessed_at`: ISO 8601 string or `null`. When this learning was last returned.
+- `staleness_score`: Float 0.0–1.0. Computed staleness; 0.0 = fresh, 1.0 = very stale. Updated periodically.
+- `relationships`: Array of relationship objects for this learning (if any). Each entry has `source_id`, `target_id`, `relationship_type` (one of `supersedes`, `depends_on`, `related_to`, `caused_by`), `created_at`, and `created_by`.
 
 ### update_learning
 
@@ -186,6 +197,47 @@ Permanently delete a learning. Prefer `deprecate_learning` for auditability.
 }
 ```
 
+### merge_learnings
+
+Merge one or more near-duplicate learnings into a single canonical entry. All duplicate learnings are deprecated after the merge.
+
+```json
+{
+  "canonical_id": "uuid-of-the-learning-to-keep",
+  "duplicate_ids": ["uuid-of-duplicate-1", "uuid-of-duplicate-2"],
+  "merged_content": "Optional replacement content for the canonical learning."
+}
+```
+
+- `canonical_id`: The learning to keep. Must be active.
+- `duplicate_ids`: One to twenty IDs of learnings to deprecate. Must not include `canonical_id`.
+- `merged_content` (optional): If provided, updates the canonical learning's content and regenerates its embedding. If omitted, canonical content is unchanged.
+
+**Response fields:**
+- `canonical`: The updated canonical learning object.
+- `deprecated_count`: Number of learnings deprecated by the merge.
+
+### relate_learnings
+
+Create a typed directed relationship between two learnings. Use this to express how learnings relate to each other.
+
+```json
+{
+  "source_id": "uuid-of-the-source-learning",
+  "target_id": "uuid-of-the-target-learning",
+  "relationship_type": "supersedes",
+  "created_by": "your-agent-name"
+}
+```
+
+- `relationship_type`: One of `supersedes`, `depends_on`, `related_to`, `caused_by`.
+- `created_by`: Your agent name (for provenance).
+- Duplicate relationships (same source, target, and type) are rejected with a validation error.
+- Relationships are cascade-deleted when either learning is deleted. Deprecated learnings retain their relationships.
+
+**Response fields:**
+- `relationship`: The created relationship record (`id`, `source_id`, `target_id`, `relationship_type`, `created_at`, `created_by`).
+
 ### list_repositories
 
 List all repositories that have stored learnings.
@@ -219,12 +271,14 @@ Prime an agent session with all relevant learnings for the current repository in
 - `verify_integrity`: Boolean (default `false`). When `true`, each returned learning includes `integrity_valid`: `true` (hash matches), `false` (possible tampering), or `null` (legacy learning). Useful for security-conscious sessions or after a database migration.
 
 Response sections:
-- `repo_learnings`: Repo-scoped learnings (ranked: gotchas → conventions → decisions → dependencies)
-- `workspace_learnings`: Workspace-scoped learnings
-- `global_learnings`: Global learnings
-- `stale_review`: Stale-flagged learnings for your attention
-- `near_duplicates`: Near-duplicate pairs to consider consolidating
-- `summary`: Counts per scope and most-recent `last_updated` timestamp
+- `repo_learnings`: Repo-scoped learnings (ranked: gotchas → conventions → decisions → dependencies). Each entry includes `access_count`, `last_accessed_at`, and `staleness_score`.
+- `workspace_learnings`: Workspace-scoped learnings (same fields as above).
+- `global_learnings`: Global learnings (same fields as above).
+- `stale_review`: Stale-flagged learnings for your attention; ranked by `staleness_score` descending (most stale first).
+- `near_duplicates`: Near-duplicate pairs to consider consolidating.
+- `conflicts`: Array of unresolved conflict objects for all returned learnings. Each entry has `id`, `learning_id_a`, `learning_id_b`, `similarity`, `conflict_type`, and `created_at`. Conflicts are keyword-heuristic detections — review before acting.
+- `relationships`: Map of learning ID → relationship array. Each relationship has `source_id`, `target_id`, `relationship_type`, `created_at`, and `created_by`.
+- `summary`: Counts per scope and most-recent `last_updated` timestamp.
 
 ---
 
@@ -246,6 +300,8 @@ Response sections:
 - Long multi-paragraph descriptions (not atomic — split into separate learnings)
 
 ## Categories
+
+Category is optional in `store_learning`. If omitted, the server infers it using KNN voting on the 5 nearest neighbor learnings in scope. Provide an explicit category when you know it — this is faster and more predictable than auto-categorization. Auto-categorization requires an embedding provider (`fastembed` or `openai`); it fails if `MINDKEG_EMBEDDING_PROVIDER=none`.
 
 | Category | When to Use |
 |---|---|

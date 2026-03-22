@@ -8,7 +8,7 @@ This file provides persistent context for AI agents (Claude Code, Cursor, Windsu
 Mind Keg MCP is a TypeScript/Node.js MCP server that stores, searches, and retrieves atomic developer learnings.
 It is designed to give AI agents persistent memory across sessions.
 
-- **Version**: 0.4.0
+- **Version**: 0.5.0
 - **Runtime**: Node.js >= 22 (uses built-in `node:sqlite`)
 - **Transport**: stdio (local) + HTTP+SSE (remote)
 - **Storage**: SQLite via `node:sqlite` (`DatabaseSync` — synchronous)
@@ -57,7 +57,7 @@ src/
     rate-limiter.ts     In-memory token bucket rate limiter (per-key, read/write buckets)
     sanitize.ts         Content sanitization (strip control chars, reject whitespace-only)
     index.ts            Security barrel export
-  tools/                One file per MCP tool (9 tools)
+  tools/                One file per MCP tool (11 tools)
     store-learning.ts
     search-learnings.ts
     update-learning.ts
@@ -67,11 +67,15 @@ src/
     list-repositories.ts
     list-workspaces.ts
     get-context.ts
+    merge-learnings.ts  MCP tool: merge_learnings
+    relate-learnings.ts MCP tool: relate_learnings
     tool-utils.ts       Shared tool utilities (getActorFromApiKey, recordToolMetrics)
   services/
     learning-service.ts Business logic for CRUD + search + getContext
     embedding-service.ts Embedding provider abstraction
     purge-service.ts    Orchestrates TTL-based and filter-based purge operations
+    conflict-detector.ts Keyword-heuristic conflict detection
+    staleness-engine.ts Staleness score computation and periodic recomputation
     ranking.ts          Pure ranking function for get_context
     budget.ts           Pure budget allocation/trimming for get_context
     index.ts            Service barrel export
@@ -83,6 +87,7 @@ src/
       001-initial.ts    Initial schema + FTS5 triggers
       002-duplicate-candidates.ts  Near-duplicate detection table
       003-ttl-and-provenance.ts    ttl_days, source_agent, integrity_hash columns
+      004-smarter-knowledge-management.ts  SKM schema migration (access tracking, conflicts, relationships, staleness)
   models/
     learning.ts         Zod schemas + TypeScript types (core entity)
     repository.ts       Repository model
@@ -342,11 +347,13 @@ Matrix: Ubuntu + Windows, Node.js 22.
 | list_repositories | List all repos with learning counts |
 | list_workspaces | List all workspaces with learning counts |
 | get_context | Prime an agent session with all relevant learnings — ranked, partitioned by scope, and budget-trimmed |
+| merge_learnings | Merge near-duplicate learnings into a canonical entry |
+| relate_learnings | Create typed relationships between learnings |
 
 ### Data Model
 
 - `content`: max 500 characters (enforced by Zod + DB constraint); sanitized to strip control characters on write
-- `category`: exactly one of: `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`
+- `category`: optional; one of: `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`; omitting triggers auto-categorization (requires an embedding provider — see Common Pitfalls)
 - `repository`: null = global or workspace-scoped; set = repo-specific
 - `workspace`: null = repo-specific or global; set = workspace-scoped (mutually exclusive with `repository`)
 - Scope truth table: `repository` set → repo-specific; `workspace` set → workspace-wide; both null → global; both set → invalid (Zod refine rejects)
@@ -357,6 +364,44 @@ Matrix: Ubuntu + Windows, Node.js 22.
 - `ttl_days`: nullable integer; overrides global default TTL for this learning; null = use global default or no expiry
 - `source_agent`: nullable string; agent name that created/last updated the learning (provenance tracking)
 - `integrity_hash`: nullable string; SHA-256 hex hash of canonical fields for tamper detection; null for legacy learnings
+- `access_count`: integer (default 0); incremented each time the learning is returned by `search_learnings` or `get_context`; feeds ranking and staleness scoring
+- `last_accessed_at`: nullable ISO 8601 timestamp; set on every search/get_context hit; null if the learning has never been returned
+- `staleness_score`: float 0.0–1.0 (default 0.0); computed from three weighted signals — age (weight 0.3), access recency (weight 0.4), and unresolved conflicts (weight 0.3); recomputed periodically; learnings with score ≥ 0.7 are auto-flagged as stale; manually calling `flag_stale` sets score to 1.0
+- `learning_conflicts` table: stores keyword-heuristic contradictions between two learnings; fields: `id`, `learning_id_a`, `learning_id_b`, `similarity`, `conflict_type`, `resolved`, `resolved_by`, `created_at`; foreign keys ON DELETE CASCADE; unique pair index enforces one row per ordered pair
+- `learning_relationships` table: typed directed edges between learnings; fields: `id`, `source_id`, `target_id`, `relationship_type` (one of `supersedes`, `depends_on`, `related_to`, `caused_by`), `created_at`, `created_by`; foreign keys ON DELETE CASCADE; unique index on `(source_id, target_id, relationship_type)` prevents duplicate relationships
+
+### Conflict Detection
+- Implemented in `src/services/conflict-detector.ts` as a pure `detectConflicts()` function (no side effects)
+- Keyword heuristic: checks for opposing negation vs. assertion signal words (e.g., "never" vs. "always") within learning content
+- Similarity threshold: only candidates with cosine similarity ≥ 0.85 (from `findScopedNeighbors`) are passed to the detector
+- Scope gate: candidate must share at least one tag with the new learning OR belong to the same category — prevents cross-domain false positives
+- Detected conflicts are stored in the `learning_conflicts` table and returned in the `store_learning` response
+- Auto-resolution: when a learning with unresolved conflicts is deprecated or its content is updated, conflicts are automatically resolved or re-evaluated
+- `get_context` surfaces unresolved conflicts for all returned learnings in a top-level `conflicts` array
+
+### Smart Staleness
+- Implemented in `src/services/staleness-engine.ts`
+- Weighted three-signal formula: `staleness_score = 0.3 * age_factor + 0.4 * access_factor + 0.3 * conflict_factor`
+- `age_factor`: days since `updated_at`, normalized
+- `access_factor`: days since `last_accessed_at` (falls back to `created_at` if never accessed), normalized
+- `conflict_factor`: presence and count of unresolved conflicts
+- Periodic recomputation: `recomputeAllStalenessScores()` runs on the same interval as the TTL purge (`MINDKEG_PURGE_INTERVAL_HOURS`, default 24h) and once at server startup
+- Auto-flag: when recomputed `staleness_score >= 0.7`, `stale_flag` is also set to `true`
+- Manual override: calling `flag_stale` sets `staleness_score = 1.0` immediately
+
+### Access Tracking
+- `access_count` and `last_accessed_at` are updated via a single `recordAccess(ids)` call after every `search_learnings` or `get_context` response
+- Access tracking is non-fatal: errors are caught and logged as warnings; they never block the search/context response
+- Both fields are included in all search and get_context responses so consumers can observe access patterns
+- Access data feeds two ranking signals in `ranking.ts`: access frequency boost (higher `access_count` = ranked higher) and access recency boost (more recently accessed = ranked higher)
+
+### Auto-Categorization
+- When `category` is omitted from `store_learning`, the service runs KNN voting using the top K=5 nearest neighbors from `findScopedNeighbors`
+- Voting: the category with the most votes among the 5 neighbors wins; ties are broken by highest average cosine similarity among tied-category neighbors
+- Minimum neighbor threshold: if fewer than 3 neighbors are available, a `ValidationError` is thrown — the caller must supply an explicit category
+- Requires an embedding provider: auto-categorization fails with `ValidationError` when `MINDKEG_EMBEDDING_PROVIDER=none`
+- `store_learning` response includes `auto_categorized: boolean` to indicate whether the category was inferred
+- `findScopedNeighbors` (implemented in `sqlite-adapter.ts`) performs a single embedding scan that is shared by dedup detection, conflict detection, and auto-categorization — no redundant scans
 
 ### Logging
 - Logger writes to **stderr** (`fd 2`) — never stdout — because stdout is used for MCP stdio protocol
@@ -405,6 +450,11 @@ All CRUD operations work identically regardless of provider. Only search quality
 - **Scope mutual exclusivity**: `repository` and `workspace` are mutually exclusive on learnings. Setting both is rejected by Zod validation. Check the refine rule in `CreateLearningInputSchema`.
 - **CUDA skip in CI**: Set `ONNX_RUNTIME_NODE_INSTALL_CUDA=skip` during `npm ci` to prevent transient 502 failures when downloading CUDA binaries.
 - **CLI version hardcoded**: The CLI displays version `0.1.0` in `cli/index.ts` line 19, but `package.json` is at `0.2.0`. These are out of sync.
+- **Auto-categorization requires an embedding provider**: When `MINDKEG_EMBEDDING_PROVIDER=none`, omitting `category` in `store_learning` throws a `ValidationError`. Auto-categorization depends on vector similarity — it cannot run without embeddings.
+- **Conflict detection produces false positives**: The keyword-heuristic approach in `conflict-detector.ts` is intentionally simple for v1. Expect false positives when negation/assertion words appear in different semantic contexts. Review detected conflicts before acting on them.
+- **Staleness recomputation runs on the purge interval**: `recomputeAllStalenessScores()` is scheduled alongside TTL purge (default every 24h). Staleness scores are not updated in real time — they reflect the state at the last recomputation cycle.
+- **Access tracking is non-fatal**: Failures in `recordAccess` (e.g., DB write errors) are swallowed and logged as warnings. A search or get_context response will succeed even if access counts were not incremented. Do not rely on access counts being perfectly consistent.
+- **`category` is now optional in `store_learning`**: Breaking change from 0.4.x. Callers that previously relied on a validation error when `category` was absent will instead trigger auto-categorization. Pass an explicit category to retain the old behavior.
 
 ## Agent Workflow
 

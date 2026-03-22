@@ -99,7 +99,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
 
   it('full learning lifecycle: store, search, update, deprecate, delete', async () => {
     // 1. Store a learning (AC-1)
-    const learning = await service.storeLearning({
+    const { learning } = await service.storeLearning({
       content: 'Always use database transactions for multi-step writes.',
       category: 'architecture',
       tags: ['database', 'transactions'],
@@ -126,7 +126,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
     expect(typeof found!.score).toBe('number');
 
     // 3. Search also returns global learnings when filtering by repo (AC-8)
-    const globalLearning = await service.storeLearning({
+    const { learning: globalLearning } = await service.storeLearning({
       content: 'Universal tip: use strict TypeScript mode.',
       category: 'conventions',
       repository: GLOBAL,
@@ -188,12 +188,12 @@ describe('E2E: Full SQLite Lifecycle', () => {
   // -------------------------------------------------------------------------
 
   it('repo-scoped search includes global learnings (AC-8)', async () => {
-    const repoLearning = await service.storeLearning({
+    const { learning: repoLearning } = await service.storeLearning({
       content: 'Repo-specific: use Prisma for DB access.',
       category: 'architecture',
       repository: REPO_PATH,
     });
-    const globalLearning = await service.storeLearning({
+    const { learning: globalLearning } = await service.storeLearning({
       content: 'Global: prefer composition over inheritance.',
       category: 'architecture',
       repository: null,
@@ -217,7 +217,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
   });
 
   it('global learning appears in REPO_PATH search even if content is specific', async () => {
-    const globalLearning = await service.storeLearning({
+    const { learning: globalLearning } = await service.storeLearning({
       content: 'Zygomorphic pattern applies universally across all repos.',
       category: 'conventions',
       repository: null, // global
@@ -239,7 +239,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
   // -------------------------------------------------------------------------
 
   it('can flag a learning as stale (AC-30)', async () => {
-    const learning = await service.storeLearning({
+    const { learning } = await service.storeLearning({
       content: 'Use version X of the API.',
       category: 'dependencies',
       repository: REPO_PATH,
@@ -387,21 +387,21 @@ describe('E2E: Full SQLite Lifecycle', () => {
     const WS_REPO = '/home/user/my-project';
 
     // Store repo-specific learning
-    const repoLearning = await service.storeLearning({
+    const { learning: repoLearning } = await service.storeLearning({
       content: 'Repo learning: use strict null checks.',
       category: 'conventions',
       repository: WS_REPO,
     });
 
     // Store workspace-scoped learning
-    const wsLearning = await service.storeLearning({
+    const { learning: wsLearning } = await service.storeLearning({
       content: 'Workspace learning: all services share auth module.',
       category: 'architecture',
       workspace: WORKSPACE,
     });
 
     // Store global learning
-    const globalLearning = await service.storeLearning({
+    const { learning: globalLearning } = await service.storeLearning({
       content: 'Global learning: prefer immutable data structures.',
       category: 'conventions',
       repository: null,
@@ -432,7 +432,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
   it('workspace learnings do not appear in search from a different workspace (WS-AC-23)', async () => {
     const WS_A = '/home/user/repos/personal/';
 
-    const wsALearning = await service.storeLearning({
+    const { learning: wsALearning } = await service.storeLearning({
       content: 'Personal workspace: use hobby project conventions.',
       category: 'conventions',
       workspace: WS_A,
@@ -470,7 +470,7 @@ describe('E2E: Full SQLite Lifecycle', () => {
       category: 'conventions',
       workspace: '/home/user/',
     });
-    const globalLearning = await service.storeLearning({
+    const { learning: globalLearning } = await service.storeLearning({
       content: 'Global: always write tests.',
       category: 'conventions',
       repository: null,

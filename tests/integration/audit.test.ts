@@ -81,7 +81,7 @@ describe('Audit logging integration (ESH-AC-5, ESH-AC-6)', () => {
 
   it('stores and retrieves a learning while audit log is active', async () => {
     // Store a learning and manually emit audit entry (as tools do)
-    const learning = await learningService.storeLearning({
+    const { learning } = await learningService.storeLearning({
       content: 'Use dependency injection for testability',
       category: 'architecture',
     });

@@ -25,7 +25,7 @@ describe('Access tracking — searchLearnings (SKM-AC-9)', () => {
   });
 
   it('access_count starts at 0 before any search', async () => {
-    const learning = await service.storeLearning({
+    const { learning } = await service.storeLearning({
       content: 'Always use prepared statements.',
       category: 'gotchas',
       repository: REPO_PATH,
@@ -120,7 +120,7 @@ describe('Access tracking — getContext (SKM-AC-10)', () => {
   });
 
   it('increments access_count for learnings returned in repo_learnings (SKM-AC-10)', async () => {
-    const stored = await service.storeLearning({
+    const { learning: stored } = await service.storeLearning({
       content: 'Use dependency injection for all services.',
       category: 'architecture',
       repository: REPO_PATH,
@@ -134,7 +134,7 @@ describe('Access tracking — getContext (SKM-AC-10)', () => {
   });
 
   it('increments access_count for global learnings returned by getContext (SKM-AC-10)', async () => {
-    const stored = await service.storeLearning({
+    const { learning: stored } = await service.storeLearning({
       content: 'Always write tests first.',
       category: 'conventions',
       // no repository → global
@@ -163,7 +163,7 @@ describe('Access tracking — getContext (SKM-AC-10)', () => {
   });
 
   it('increments access for learnings in stale_review (OQ-4)', async () => {
-    const stored = await service.storeLearning({
+    const { learning: stored } = await service.storeLearning({
       content: 'Review this pattern periodically.',
       category: 'gotchas',
       repository: REPO_PATH,
@@ -179,7 +179,7 @@ describe('Access tracking — getContext (SKM-AC-10)', () => {
   });
 
   it('second getContext call results in access_count=2', async () => {
-    const stored = await service.storeLearning({
+    const { learning: stored } = await service.storeLearning({
       content: 'Use dependency injection for all services.',
       category: 'architecture',
       repository: REPO_PATH,

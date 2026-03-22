@@ -93,12 +93,25 @@ export function registerImportCommand(program: Command): void {
           ? await embedding.generateEmbedding(rawLearning.content)
           : null;
 
+        // Imported learnings must have an explicit category — auto-categorization
+        // is not triggered during import (it requires a live embedding service and scope context).
+        // If category is absent after validation, skip and warn.
+        const resolvedCategory = parseResult.data.category;
+        if (resolvedCategory == null) {
+          log.warn(
+            { content: rawLearning.content?.slice(0, 50) },
+            'Skipping import: category is required for imported learnings'
+          );
+          skipped++;
+          continue;
+        }
+
         try {
           const newId = randomUUID(); // Always generate new IDs to avoid conflicts
           await storage.createLearning({
             id: newId,
             content: parseResult.data.content,
-            category: parseResult.data.category,
+            category: resolvedCategory,
             tags: parseResult.data.tags,
             repository: parseResult.data.repository,
             workspace: parseResult.data.workspace ?? null,

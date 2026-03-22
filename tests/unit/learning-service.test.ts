@@ -46,7 +46,7 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
   return {
     initialize: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
-    createLearning: vi.fn().mockImplementation(async (record) => makeLearning({ id: record.id })),
+    createLearning: vi.fn().mockImplementation(async (record) => makeLearning({ id: record.id, category: record.category ?? 'architecture' })),
     getLearning: vi.fn().mockResolvedValue(null),
     updateLearning: vi.fn().mockResolvedValue(null),
     deleteLearning: vi.fn().mockResolvedValue(false),
@@ -103,7 +103,7 @@ describe('LearningService.storeLearning', () => {
     });
 
     expect(storage.createLearning).toHaveBeenCalledOnce();
-    expect(result.id).toBeTruthy();
+    expect(result.learning.id).toBeTruthy();
   });
 
   it('generates an embedding when provider is not "none" (AC-9)', async () => {
@@ -179,6 +179,167 @@ describe('LearningService.storeLearning', () => {
     expect(storage.createLearning).toHaveBeenCalledWith(
       expect.objectContaining({ tags: ['node', 'npm'] })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// autoCategorize (via storeLearning) tests (SKM-AC-17 through SKM-AC-21)
+// ---------------------------------------------------------------------------
+describe('LearningService autoCategorize behavior', () => {
+  let storage: StorageAdapter;
+  let embedding: EmbeddingService;
+  let service: LearningService;
+
+  const mockEmbeddingVector = [0.1, 0.2, 0.3];
+
+  beforeEach(() => {
+    embedding = makeMockEmbedding({
+      generateEmbedding: vi.fn().mockResolvedValue(mockEmbeddingVector),
+    });
+  });
+
+  it('SKM-AC-21: explicit category skips auto-categorization, auto_categorized=false', async () => {
+    storage = makeMockStorage();
+    service = new LearningService(storage, embedding);
+
+    const result = await service.storeLearning({
+      content: 'Use transactions.',
+      category: 'architecture',
+    });
+
+    expect(result.auto_categorized).toBe(false);
+    expect(result.learning.category).toBe('architecture');
+    // findScopedNeighbors should NOT be called when category is explicit
+    expect(storage.findScopedNeighbors).not.toHaveBeenCalled();
+  });
+
+  it('SKM-AC-17, SKM-AC-20: omitting category triggers auto-categorization, auto_categorized=true', async () => {
+    // 5 neighbors all voting "gotchas" — clear majority
+    const neighbors = [
+      { id: 'a', content: 'gotcha 1', category: 'gotchas', embedding: [0.1, 0.2, 0.3], similarity: 0.9 },
+      { id: 'b', content: 'gotcha 2', category: 'gotchas', embedding: [0.1, 0.2, 0.3], similarity: 0.85 },
+      { id: 'c', content: 'gotcha 3', category: 'gotchas', embedding: [0.1, 0.2, 0.3], similarity: 0.8 },
+    ];
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue(neighbors),
+    });
+    service = new LearningService(storage, embedding);
+
+    const result = await service.storeLearning({
+      content: 'Another tricky gotcha.',
+      // no category
+    });
+
+    expect(result.auto_categorized).toBe(true);
+    expect(result.learning.category).toBe('gotchas');
+    expect(storage.findScopedNeighbors).toHaveBeenCalledOnce();
+  });
+
+  it('SKM-AC-17: null category triggers auto-categorization', async () => {
+    const neighbors = [
+      { id: 'a', content: 'dep 1', category: 'dependencies', embedding: [0.1, 0.2, 0.3], similarity: 0.9 },
+      { id: 'b', content: 'dep 2', category: 'dependencies', embedding: [0.1, 0.2, 0.3], similarity: 0.85 },
+      { id: 'c', content: 'dep 3', category: 'dependencies', embedding: [0.1, 0.2, 0.3], similarity: 0.8 },
+    ];
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue(neighbors),
+    });
+    service = new LearningService(storage, embedding);
+
+    const result = await service.storeLearning({
+      content: 'Install using npm.',
+      category: null,
+    });
+
+    expect(result.auto_categorized).toBe(true);
+    expect(result.learning.category).toBe('dependencies');
+  });
+
+  it('SKM-AC-18: KNN voting selects majority category among top-5 neighbors', async () => {
+    // 3 votes "gotchas", 2 votes "architecture" among top 5
+    const neighbors = [
+      { id: 'a', content: 'g1', category: 'gotchas', embedding: [0.1], similarity: 0.95 },
+      { id: 'b', content: 'g2', category: 'gotchas', embedding: [0.1], similarity: 0.90 },
+      { id: 'c', content: 'a1', category: 'architecture', embedding: [0.1], similarity: 0.88 },
+      { id: 'd', content: 'g3', category: 'gotchas', embedding: [0.1], similarity: 0.85 },
+      { id: 'e', content: 'a2', category: 'architecture', embedding: [0.1], similarity: 0.80 },
+      // 6th neighbor — should be ignored (only top 5 used)
+      { id: 'f', content: 'arch3', category: 'architecture', embedding: [0.1], similarity: 0.70 },
+    ];
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue(neighbors),
+    });
+    service = new LearningService(storage, embedding);
+
+    const result = await service.storeLearning({ content: 'A tricky edge case.', category: null });
+
+    expect(result.auto_categorized).toBe(true);
+    expect(result.learning.category).toBe('gotchas');
+  });
+
+  it('SKM-AC-18: tie-breaking uses highest average similarity', async () => {
+    // 2 votes "gotchas" (avg sim=0.9), 2 votes "conventions" (avg sim=0.7), 1 vote "debugging"
+    // Tie between gotchas and conventions by count; gotchas wins on avg sim
+    const neighbors = [
+      { id: 'a', content: 'g1', category: 'gotchas', embedding: [0.1], similarity: 0.95 },
+      { id: 'b', content: 'g2', category: 'gotchas', embedding: [0.1], similarity: 0.85 },
+      { id: 'c', content: 'c1', category: 'conventions', embedding: [0.1], similarity: 0.75 },
+      { id: 'd', content: 'c2', category: 'conventions', embedding: [0.1], similarity: 0.65 },
+      { id: 'e', content: 'd1', category: 'debugging', embedding: [0.1], similarity: 0.60 },
+    ];
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue(neighbors),
+    });
+    service = new LearningService(storage, embedding);
+
+    const result = await service.storeLearning({ content: 'Tie scenario.', category: null });
+
+    expect(result.auto_categorized).toBe(true);
+    // gotchas avg sim = (0.95 + 0.85) / 2 = 0.90; conventions avg = (0.75 + 0.65) / 2 = 0.70
+    expect(result.learning.category).toBe('gotchas');
+  });
+
+  it('SKM-AC-19: fewer than 3 neighbors throws ValidationError', async () => {
+    // Only 2 neighbors — insufficient
+    const neighbors = [
+      { id: 'a', content: 'g1', category: 'gotchas', embedding: [0.1], similarity: 0.9 },
+      { id: 'b', content: 'g2', category: 'gotchas', embedding: [0.1], similarity: 0.85 },
+    ];
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue(neighbors),
+    });
+    service = new LearningService(storage, embedding);
+
+    await expect(
+      service.storeLearning({ content: 'Too sparse.', category: null })
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('SKM-AC-19: zero neighbors throws ValidationError', async () => {
+    storage = makeMockStorage({
+      findScopedNeighbors: vi.fn().mockResolvedValue([]),
+    });
+    service = new LearningService(storage, embedding);
+
+    await expect(
+      service.storeLearning({ content: 'Empty scope.', category: undefined })
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('throws ValidationError when no embedding provider and category omitted', async () => {
+    // Provider returns null (provider=none)
+    embedding = makeMockEmbedding({
+      generateEmbedding: vi.fn().mockResolvedValue(null),
+    });
+    storage = makeMockStorage();
+    service = new LearningService(storage, embedding);
+
+    await expect(
+      service.storeLearning({ content: 'No embedding, no category.', category: null })
+    ).rejects.toThrow(ValidationError);
+
+    // findScopedNeighbors should never be called when embedding is null
+    expect(storage.findScopedNeighbors).not.toHaveBeenCalled();
   });
 });
 

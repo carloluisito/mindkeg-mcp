@@ -33,17 +33,17 @@ describe('Integration: merge_learnings', () => {
   // -------------------------------------------------------------------------
 
   it('merges two duplicates into canonical without changing content (SKM-AC-3, SKM-AC-4)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Always use transactions for DB writes.',
       category: 'architecture',
       repository: REPO_PATH,
     });
-    const dup1 = await service.storeLearning({
+    const { learning: dup1 } = await service.storeLearning({
       content: 'Use DB transactions for multi-step writes.',
       category: 'architecture',
       repository: REPO_PATH,
     });
-    const dup2 = await service.storeLearning({
+    const { learning: dup2 } = await service.storeLearning({
       content: 'DB writes should always be transactional.',
       category: 'architecture',
       repository: REPO_PATH,
@@ -72,12 +72,12 @@ describe('Integration: merge_learnings', () => {
   // -------------------------------------------------------------------------
 
   it('updates canonical content when merged_content is provided (SKM-AC-2)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Use transactions for DB writes.',
       category: 'architecture',
       repository: REPO_PATH,
     });
-    const dup = await service.storeLearning({
+    const { learning: dup } = await service.storeLearning({
       content: 'All DB writes should be transactional.',
       category: 'architecture',
       repository: REPO_PATH,
@@ -103,12 +103,12 @@ describe('Integration: merge_learnings', () => {
   // -------------------------------------------------------------------------
 
   it('cleans up duplicate_candidates after deprecation (SKM-AC-5)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Use async/await instead of callbacks.',
       category: 'conventions',
       repository: REPO_PATH,
     });
-    const dup = await service.storeLearning({
+    const { learning: dup } = await service.storeLearning({
       content: 'Prefer async/await over callback patterns.',
       category: 'conventions',
       repository: REPO_PATH,
@@ -131,7 +131,7 @@ describe('Integration: merge_learnings', () => {
 
   it('throws NotFoundError when canonical_id does not exist (SKM-AC-7)', async () => {
     const nonExistent = '00000000-0000-0000-0000-000000000001';
-    const dup = await service.storeLearning({
+    const { learning: dup } = await service.storeLearning({
       content: 'Some learning.',
       category: 'gotchas',
     });
@@ -148,7 +148,7 @@ describe('Integration: merge_learnings', () => {
   });
 
   it('throws NotFoundError when a duplicate_id does not exist (SKM-AC-7)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Some canonical learning.',
       category: 'gotchas',
     });
@@ -166,7 +166,7 @@ describe('Integration: merge_learnings', () => {
   });
 
   it('throws ValidationError when canonical is already deprecated (SKM-AC-7)', async () => {
-    const learning = await service.storeLearning({
+    const { learning } = await service.storeLearning({
       content: 'Already deprecated canonical.',
       category: 'gotchas',
     });
@@ -183,11 +183,11 @@ describe('Integration: merge_learnings', () => {
   });
 
   it('throws ValidationError when a duplicate is already deprecated (SKM-AC-7)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Canonical learning.',
       category: 'gotchas',
     });
-    const dup = await service.storeLearning({
+    const { learning: dup } = await service.storeLearning({
       content: 'Duplicate learning.',
       category: 'gotchas',
     });
@@ -210,17 +210,17 @@ describe('Integration: merge_learnings', () => {
   // -------------------------------------------------------------------------
 
   it('full merge flow: stores 3 learnings, merges 2 into canonical (SKM-AC-1 through SKM-AC-6)', async () => {
-    const canonical = await service.storeLearning({
+    const { learning: canonical } = await service.storeLearning({
       content: 'Use ESM imports with .js extension.',
       category: 'conventions',
       repository: REPO_PATH,
     });
-    const dup1 = await service.storeLearning({
+    const { learning: dup1 } = await service.storeLearning({
       content: 'ESM requires .js extension on imports.',
       category: 'conventions',
       repository: REPO_PATH,
     });
-    const dup2 = await service.storeLearning({
+    const { learning: dup2 } = await service.storeLearning({
       content: 'Always add .js to relative imports in ESM projects.',
       category: 'conventions',
       repository: REPO_PATH,

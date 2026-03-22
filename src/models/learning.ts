@@ -83,8 +83,12 @@ export const CreateLearningInputSchema = z
         }
       }),
 
-    /** Exactly one of the six allowed categories (AC-13). */
-    category: z.enum(LEARNING_CATEGORIES),
+    /**
+     * Exactly one of the six allowed categories (AC-13).
+     * Optional: when omitted or null, auto-categorization via KNN voting is attempted (SKM-AC-17).
+     * Requires an embedding provider to be configured; throws ValidationError when provider=none.
+     */
+    category: z.enum(LEARNING_CATEGORIES).optional().nullable(),
 
     /** Free-form labels. Defaults to empty array (AC-14). */
     tags: z.array(z.string()).default([]),

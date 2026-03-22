@@ -34,7 +34,9 @@ export function registerStoreLearning(
         .describe('The learning text. Must be atomic — one insight per entry, 1-3 sentences, max 500 characters.'),
       category: z
         .enum(LEARNING_CATEGORIES)
-        .describe('Category: architecture, conventions, debugging, gotchas, dependencies, or decisions.'),
+        .optional()
+        .nullable()
+        .describe('Category: architecture, conventions, debugging, gotchas, dependencies, or decisions. Omit or pass null to auto-categorize via KNN voting (requires an embedding provider; SKM-AC-17).'),
       tags: z
         .array(z.string())
         .optional()
@@ -79,9 +81,9 @@ export function registerStoreLearning(
         // Authenticate before executing (AC-21)
         await authenticate(getApiKey(), storage, args.repository ?? null);
 
-        const learning = await learningService.storeLearning({
+        const { learning, auto_categorized } = await learningService.storeLearning({
           content: args.content,
-          category: args.category,
+          category: args.category ?? null,
           tags: args.tags,
           repository: args.repository ?? null,
           workspace: args.workspace ?? null,
@@ -99,7 +101,8 @@ export function registerStoreLearning(
           result: 'success',
           client: { transport: 'stdio', pid: process.pid },
           metadata: {
-            category: args.category,
+            category: learning.category,
+            auto_categorized,
             repository: args.repository ?? null,
             workspace: args.workspace ?? null,
             ttl_days: args.ttl_days ?? null,
@@ -127,6 +130,7 @@ export function registerStoreLearning(
                   created_at: learning.created_at,
                   embedding_generated: learning.embedding !== null,
                 },
+                auto_categorized,
               }, null, 2),
             },
           ],

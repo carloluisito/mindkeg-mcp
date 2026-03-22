@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import type { EmbeddingService } from './embedding-service.js';
-import type { Learning, LearningWithScore } from '../models/learning.js';
+import type { Learning, LearningWithScore, LearningCategory } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 import {
   CreateLearningInputSchema,
@@ -59,6 +59,13 @@ export interface DeleteResult {
   id: string;
 }
 
+/** Result of storing a learning, including auto-categorization metadata (SKM-AC-20). */
+export interface StoreLearningResult {
+  learning: Learning;
+  /** True when category was auto-assigned via KNN voting (SKM-AC-20). */
+  auto_categorized: boolean;
+}
+
 export class LearningService {
   private readonly storage: StorageAdapter;
   private readonly embedding: EmbeddingService;
@@ -74,12 +81,13 @@ export class LearningService {
 
   /**
    * Validate, embed, and persist a new learning.
+   * When `category` is omitted or null, auto-categorization via KNN voting is attempted (SKM-AC-17).
    * @param rawInput - Raw (unvalidated) input from the MCP tool call
    */
-  async storeLearning(rawInput: StoreLearningInput): Promise<Learning> {
+  async storeLearning(rawInput: StoreLearningInput): Promise<StoreLearningResult> {
     const log = getLogger();
 
-    // 1. Validate input (Zod schema enforces AC-6, AC-13, AC-14, AC-15)
+    // 1. Validate input (Zod schema enforces AC-6, AC-14, AC-15; category now optional SKM-AC-17)
     const parseResult = CreateLearningInputSchema.safeParse(rawInput);
     if (!parseResult.success) {
       throw new ValidationError(
@@ -106,7 +114,48 @@ export class LearningService {
       }
     }
 
-    // 3. Persist to storage (AC-27 timestamps set by adapter, AC-28 source field)
+    // 3. Auto-categorization (SKM-AC-17, SKM-AC-18, SKM-AC-19, SKM-AC-21)
+    // Only runs when category is not explicitly provided.
+    let resolvedCategory: LearningCategory;
+    let autoCategorized = false;
+
+    if (input.category != null) {
+      // SKM-AC-21: Explicit category — skip auto-categorization entirely
+      resolvedCategory = input.category;
+    } else {
+      // Category omitted or null — attempt KNN voting
+      if (embeddingVector === null) {
+        // No embedding provider (provider=none) — cannot auto-categorize
+        throw new ValidationError(
+          'Category is required when no embedding provider is configured'
+        );
+      }
+
+      // Normalize paths for the scope scan (same normalization as step 4 below)
+      const normalizedRepositoryForScan =
+        input.repository != null ? input.repository.replace(/\\/g, '/') : null;
+      const normalizedWorkspaceForScan =
+        input.workspace != null ? normalizePath(input.workspace) : null;
+
+      // Consolidated scope scan — fetch all same-scope neighbors (threshold=0.0 to get all)
+      const neighbors = await this.storage.findScopedNeighbors(
+        embeddingVector,
+        { repository: normalizedRepositoryForScan, workspace: normalizedWorkspaceForScan },
+        0.0
+      );
+
+      const voted = this.autoCategorize(neighbors);
+      if (voted === null) {
+        // SKM-AC-19: fewer than 3 neighbors — require explicit category
+        throw new ValidationError(
+          'Auto-categorization failed: insufficient existing learnings in this scope. Please provide an explicit category.'
+        );
+      }
+      resolvedCategory = voted;
+      autoCategorized = true;
+    }
+
+    // 4. Persist to storage (AC-27 timestamps set by adapter, AC-28 source field)
     // Normalize path separators to forward slashes so stored values always match
     // the normalized form produced by deriveWorkspace() during search (Bug A fix).
     //
@@ -118,10 +167,11 @@ export class LearningService {
       input.repository != null ? input.repository.replace(/\\/g, '/') : null;
     const normalizedWorkspace = input.workspace != null ? normalizePath(input.workspace) : null;
 
-    // Compute integrity hash (ESH-AC-26) — covers human-authored fields before storage
+    // Compute integrity hash (ESH-AC-26) — covers human-authored fields before storage.
+    // Uses resolvedCategory (always non-null at this point).
     const integrityHash = computeIntegrityHash({
       content: input.content,
-      category: input.category,
+      category: resolvedCategory,
       tags: input.tags,
       repository: normalizedRepository,
       workspace: normalizedWorkspace,
@@ -131,7 +181,7 @@ export class LearningService {
     const learning = await this.storage.createLearning({
       id,
       content: input.content,
-      category: input.category,
+      category: resolvedCategory,
       tags: input.tags,
       repository: normalizedRepository,
       workspace: normalizedWorkspace,
@@ -143,7 +193,7 @@ export class LearningService {
       ttl_days: input.ttl_days,
     });
 
-    // 4. Duplicate detection: compare against same-scope learnings (GC-AC-25).
+    // 5. Duplicate detection: compare against same-scope learnings (GC-AC-25).
     // Only runs when the learning has an embedding; non-fatal on failure.
     if (embeddingVector !== null) {
       try {
@@ -157,11 +207,11 @@ export class LearningService {
     }
 
     log.info(
-      { id: learning.id, category: input.category, repository: normalizedRepository, workspace: normalizedWorkspace },
+      { id: learning.id, category: resolvedCategory, auto_categorized: autoCategorized, repository: normalizedRepository, workspace: normalizedWorkspace },
       'Learning stored'
     );
 
-    return learning;
+    return { learning, auto_categorized: autoCategorized };
   }
 
   // ---------------------------------------------------------------------------
@@ -456,6 +506,49 @@ export class LearningService {
    */
   async listWorkspaces(): Promise<Array<{ workspace: string; learning_count: number }>> {
     return await this.storage.listWorkspaces();
+  }
+
+  // ---------------------------------------------------------------------------
+  // autoCategorize (SKM-AC-18, SKM-AC-19)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Auto-categorize by KNN voting over the nearest embeddings from the
+   * consolidated scope scan. Returns the voted category, or null if insufficient
+   * neighbors (fewer than 3). Traces to SKM-AC-18, SKM-AC-19.
+   *
+   * @param neighbors - All same-scope neighbors sorted by similarity descending.
+   *   Only the top 5 are used (K=5 per spec SKM-AC-18).
+   */
+  private autoCategorize(
+    neighbors: Array<{ id: string; category: string; similarity: number }>
+  ): LearningCategory | null {
+    const topK = neighbors.slice(0, 5);
+    if (topK.length < 3) return null;
+
+    // Count votes per category
+    const votes = new Map<string, { count: number; totalSimilarity: number }>();
+    for (const n of topK) {
+      const existing = votes.get(n.category) ?? { count: 0, totalSimilarity: 0 };
+      existing.count++;
+      existing.totalSimilarity += n.similarity;
+      votes.set(n.category, existing);
+    }
+
+    // Find majority; tie-break by highest average similarity
+    let bestCategory: string | null = null;
+    let bestCount = 0;
+    let bestAvgSim = 0;
+    for (const [category, { count, totalSimilarity }] of votes) {
+      const avgSim = totalSimilarity / count;
+      if (count > bestCount || (count === bestCount && avgSim > bestAvgSim)) {
+        bestCategory = category;
+        bestCount = count;
+        bestAvgSim = avgSim;
+      }
+    }
+
+    return bestCategory as LearningCategory | null;
   }
 
   // ---------------------------------------------------------------------------

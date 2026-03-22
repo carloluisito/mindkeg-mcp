@@ -210,6 +210,29 @@ export const DeleteLearningInputSchema = z.object({
 
 export type DeleteLearningInput = z.infer<typeof DeleteLearningInputSchema>;
 
+/** Zod schema for merging duplicate learnings into a canonical one (SKM-AC-1, SKM-AC-7). */
+export const MergeLearningsInputSchema = z
+  .object({
+    /** UUID of the learning to keep as the canonical entry. */
+    canonical_id: z.string().uuid(),
+
+    /** UUIDs of the duplicate learnings to deprecate. Min 1, max 20. */
+    duplicate_ids: z.array(z.string().uuid()).min(1).max(20),
+
+    /**
+     * Optional merged content. When provided, the canonical learning's content is
+     * updated to this value and its embedding is regenerated (SKM-AC-2).
+     * When omitted, the canonical learning is unchanged (SKM-AC-3).
+     */
+    merged_content: z.string().min(1).max(500).optional(),
+  })
+  .refine(
+    (data) => !data.duplicate_ids.includes(data.canonical_id),
+    { message: 'canonical_id must not appear in duplicate_ids' }
+  );
+
+export type MergeLearningsInput = z.infer<typeof MergeLearningsInputSchema>;
+
 /** Zod schema for search parameters (AC-9, AC-10, AC-11). */
 export const SearchLearningsInputSchema = z.object({
   /** Natural-language query for semantic/keyword search. */

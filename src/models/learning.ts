@@ -42,6 +42,12 @@ export interface Learning {
   source_agent: string | null;
   /** SHA-256 integrity hash of canonical learning fields (ESH-AC-26). Null for legacy learnings. */
   integrity_hash: string | null;
+  /** Number of times this learning has been returned in search or get_context results (SKM-AC-8). */
+  access_count: number;
+  /** ISO 8601 timestamp of last access via search or get_context. Null if never accessed (SKM-AC-8). */
+  last_accessed_at: string | null;
+  /** Continuous staleness score in [0.0, 1.0]. Higher = more stale (SKM-AC-30). */
+  staleness_score: number;
 }
 
 /** A Learning augmented with a relevance score, returned from search results (AC-12). */
@@ -329,6 +335,12 @@ export interface RankedLearning {
    * (ESH-AC-27)
    */
   integrity_valid?: boolean | null;
+  /** Number of times this learning has been returned in search or get_context results (SKM-AC-8). */
+  access_count: number;
+  /** ISO 8601 timestamp of last access via search or get_context. Null if never accessed (SKM-AC-8). */
+  last_accessed_at: string | null;
+  /** Continuous staleness score in [0.0, 1.0]. Higher = more stale (SKM-AC-30). */
+  staleness_score: number;
 }
 
 /**

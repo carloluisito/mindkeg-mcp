@@ -44,6 +44,10 @@ import {
   upStatements as migration003Statements,
   version as migration003Version,
 } from './migrations/003-ttl-and-provenance.js';
+import {
+  upStatements as migration004Statements,
+  version as migration004Version,
+} from './migrations/004-smarter-knowledge-management.js';
 
 // ---------------------------------------------------------------------------
 // node:sqlite loader — lazy to avoid Vite/tsup resolution issues
@@ -234,6 +238,30 @@ export class SqliteAdapter implements StorageAdapter {
         .run(migration003Version);
       log.info({ migration: migration003Version }, 'Migration 003-ttl-and-provenance applied');
     }
+
+    if (currentVersion < migration004Version) {
+      log.info({ migration: migration004Version }, 'Applying migration 004-smarter-knowledge-management');
+      for (const stmt of migration004Statements) {
+        try {
+          this.db.exec(stmt + ';');
+        } catch (err) {
+          const msg = String(err);
+          // ALTER TABLE ADD COLUMN errors with "duplicate column name" if already applied;
+          // CREATE TABLE/INDEX errors with "already exists" on idempotent re-runs.
+          if (
+            !msg.includes('already exists') &&
+            !msg.includes('duplicate column name') &&
+            !msg.includes('duplicate')
+          ) {
+            throw new StorageError(`Migration failed on statement: ${stmt}\n${msg}`, err);
+          }
+        }
+      }
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
+        .run(migration004Version);
+      log.info({ migration: migration004Version }, 'Migration 004-smarter-knowledge-management applied');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -252,8 +280,8 @@ export class SqliteAdapter implements StorageAdapter {
       this.db
         .prepare(
           `INSERT INTO learnings
-           (id, content, category, tags, repository, workspace, group_id, source, status, stale_flag, embedding, created_at, updated_at, ttl_days, source_agent, integrity_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?)`
+           (id, content, category, tags, repository, workspace, group_id, source, status, stale_flag, embedding, created_at, updated_at, ttl_days, source_agent, integrity_hash, access_count, last_accessed_at, staleness_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           record.id,
@@ -269,7 +297,10 @@ export class SqliteAdapter implements StorageAdapter {
           now,
           record.ttl_days ?? null,
           record.source_agent ?? null,
-          record.integrity_hash ?? null
+          record.integrity_hash ?? null,
+          record.access_count ?? 0,
+          record.last_accessed_at ?? null,
+          record.staleness_score ?? 0.0
         );
 
       const learning = this.getLearningSync(record.id);
@@ -355,6 +386,18 @@ export class SqliteAdapter implements StorageAdapter {
     if (updates.integrity_hash !== undefined) {
       setClauses.push('integrity_hash = ?');
       params.push(updates.integrity_hash ?? null);
+    }
+    if (updates.access_count !== undefined) {
+      setClauses.push('access_count = ?');
+      params.push(updates.access_count);
+    }
+    if (updates.last_accessed_at !== undefined) {
+      setClauses.push('last_accessed_at = ?');
+      params.push(updates.last_accessed_at ?? null);
+    }
+    if (updates.staleness_score !== undefined) {
+      setClauses.push('staleness_score = ?');
+      params.push(updates.staleness_score);
     }
 
     params.push(id);
@@ -1016,6 +1059,85 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to cleanup duplicate candidates: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // SKM: findScopedNeighbors (consolidated similarity scan — SKM Phase 1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Find all same-scope active learnings with embeddings, compute cosine similarity
+   * against the given embedding, and return those above the minimum threshold.
+   * Returns lightweight records sorted by similarity descending.
+   * Used by: duplicate detection, conflict detection, auto-categorization (SKM).
+   *
+   * Unlike checkAndStoreDuplicates this method does NOT exclude any particular ID.
+   * Traces to SKM-AC-18, SKM-AC-22.
+   */
+  async findScopedNeighbors(
+    embedding: number[],
+    scope: { repository: string | null; workspace: string | null },
+    minSimilarity: number
+  ): Promise<Array<{ id: string; content: string; category: string; embedding: number[]; similarity: number }>> {
+    try {
+      let rows: RawLearningRow[];
+
+      if (scope.repository !== null) {
+        rows = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE repository = ? AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all(scope.repository) as RawLearningRow[];
+      } else if (scope.workspace !== null) {
+        rows = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE workspace = ? AND repository IS NULL AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all(scope.workspace) as RawLearningRow[];
+      } else {
+        rows = this.db
+          .prepare(
+            `SELECT * FROM learnings
+             WHERE repository IS NULL AND workspace IS NULL AND embedding IS NOT NULL AND status = 'active'`
+          )
+          .all() as RawLearningRow[];
+      }
+
+      const results: Array<{ id: string; content: string; category: string; embedding: number[]; similarity: number }> = [];
+
+      for (const row of rows) {
+        if (!row.embedding) continue;
+        // Decrypt embedding before parsing if key is configured (ESH-AC-2/3)
+        const embeddingRaw = this.encryptionKey !== null
+          ? this.decryptField(row.embedding)
+          : row.embedding;
+        const candidateEmbedding = JSON.parse(embeddingRaw) as number[];
+        const similarity = cosineSimilarity(embedding, candidateEmbedding);
+
+        if (similarity >= minSimilarity) {
+          // Decrypt content for conflict detection / auto-categorization consumers
+          const content = this.encryptionKey !== null
+            ? this.decryptField(row.content)
+            : row.content;
+          results.push({
+            id: row.id,
+            content,
+            category: row.category,
+            embedding: candidateEmbedding,
+            similarity,
+          });
+        }
+      }
+
+      // Sort by similarity descending
+      results.sort((a, b) => b.similarity - a.similarity);
+
+      return results;
+    } catch (err) {
+      throw new StorageError(`Failed to find scoped neighbors: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1164,12 @@ interface RawLearningRow {
   source_agent: string | null;
   /** SHA-256 integrity hash (ESH-AC-26). NULL for legacy rows. */
   integrity_hash: string | null;
+  /** Number of times this learning has been returned by search or get_context (SKM-AC-8). */
+  access_count: number;
+  /** ISO 8601 timestamp of last access. NULL if never accessed (SKM-AC-8). */
+  last_accessed_at: string | null;
+  /** Continuous staleness score [0.0, 1.0] (SKM-AC-30). */
+  staleness_score: number;
 }
 
 interface RawApiKeyRow {
@@ -1099,6 +1227,9 @@ function rowToLearning(
     ttl_days: row.ttl_days ?? null,
     source_agent: row.source_agent ?? null,
     integrity_hash: row.integrity_hash ?? null,
+    access_count: row.access_count ?? 0,
+    last_accessed_at: row.last_accessed_at ?? null,
+    staleness_score: row.staleness_score ?? 0.0,
   };
 }
 

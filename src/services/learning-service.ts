@@ -595,6 +595,9 @@ export class LearningService {
       ttl_days: l.ttl_days,
       source_agent: l.source_agent,
       integrity_hash: l.integrity_hash,
+      access_count: l.access_count,
+      last_accessed_at: l.last_accessed_at,
+      staleness_score: l.staleness_score,
       // Opt-in integrity verification (ESH-AC-27)
       ...(input.verify_integrity
         ? { integrity_valid: verifyIntegrityHash(l) }

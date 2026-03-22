@@ -32,6 +32,9 @@ function makeLearning(contentLength = 80, overrides: Partial<Learning> = {}): Le
     ttl_days: null,
     source_agent: null,
     integrity_hash: null,
+    access_count: 0,
+    last_accessed_at: null,
+    staleness_score: 0.0,
     ...overrides,
   };
 }

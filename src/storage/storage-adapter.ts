@@ -72,6 +72,12 @@ export interface CreateLearningRecord {
   source_agent?: string | null;
   /** SHA-256 integrity hash (ESH-AC-26). */
   integrity_hash?: string | null;
+  /** Access count override (SKM-AC-8). Defaults to 0 on insert. */
+  access_count?: number;
+  /** Last accessed timestamp override (SKM-AC-8). Defaults to NULL on insert. */
+  last_accessed_at?: string | null;
+  /** Staleness score override (SKM-AC-30). Defaults to 0.0 on insert. */
+  staleness_score?: number;
 }
 
 /** Input for updating a learning in storage. */
@@ -91,6 +97,12 @@ export interface UpdateLearningRecord {
   source_agent?: string | null;
   /** SHA-256 integrity hash (ESH-AC-26). */
   integrity_hash?: string | null;
+  /** Access count to set (SKM-AC-8). */
+  access_count?: number;
+  /** Last accessed timestamp to set (SKM-AC-8). */
+  last_accessed_at?: string | null;
+  /** Staleness score to set (SKM-AC-30). */
+  staleness_score?: number;
 }
 
 /** Filters for searching learnings. */
@@ -298,6 +310,23 @@ export interface StorageAdapter {
    * Called on deprecate and delete. Traces to GC-AC-27.
    */
   cleanupDuplicateCandidates(learningId: string): Promise<void>;
+
+  /**
+   * Find all same-scope active learnings with embeddings, compute cosine similarity
+   * against the given embedding, and return those above the minimum threshold.
+   * Returns lightweight records sorted by similarity descending.
+   * Used by: duplicate detection, conflict detection, auto-categorization (SKM).
+   *
+   * Unlike checkAndStoreDuplicates, this method does NOT exclude any particular
+   * learning ID — it scans the full same-scope active set.
+   *
+   * Traces to SKM-AC-18, SKM-AC-22.
+   */
+  findScopedNeighbors(
+    embedding: number[],
+    scope: { repository: string | null; workspace: string | null },
+    minSimilarity: number
+  ): Promise<Array<{ id: string; content: string; category: string; embedding: number[]; similarity: number }>>;
 }
 
 /** Aggregate statistics about the learnings database. */

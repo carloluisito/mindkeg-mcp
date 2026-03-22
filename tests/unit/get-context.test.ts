@@ -33,6 +33,9 @@ function makeLearning(overrides: Partial<Learning> = {}): Learning {
     ttl_days: null,
     source_agent: null,
     integrity_hash: null,
+    access_count: 0,
+    last_accessed_at: null,
+    staleness_score: 0.0,
     ...overrides,
   };
 }
@@ -77,6 +80,7 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     getDuplicateCandidates: vi.fn().mockResolvedValue([]),
     checkAndStoreDuplicates: vi.fn().mockResolvedValue(undefined),
     cleanupDuplicateCandidates: vi.fn().mockResolvedValue(undefined),
+    findScopedNeighbors: vi.fn().mockResolvedValue([]),
     purgeExpired: vi.fn().mockReturnValue(0),
     purgeByFilter: vi.fn().mockReturnValue(0),
     ...overrides,

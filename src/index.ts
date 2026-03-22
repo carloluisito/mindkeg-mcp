@@ -15,6 +15,7 @@ import type { EmbeddingService } from './services/embedding-service.js';
 import { createMcpServer } from './server.js';
 import { getLogger } from './utils/logger.js';
 import { PurgeService } from './services/purge-service.js';
+import { recomputeAllStalenessScores } from './services/staleness-engine.js';
 import { AuditLogger } from './audit/audit-logger.js';
 import { handleHealthCheck } from './monitoring/health.js';
 import { metricsRegistry, startDefaultMetricsCollection } from './monitoring/metrics.js';
@@ -56,8 +57,9 @@ function keyHashesMatch(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Run a startup purge and schedule a periodic purge timer.
+ * Run a startup purge + staleness recomputation and schedule a periodic cycle.
  * Returns the timer handle so the caller can clear it on shutdown if needed.
+ * Traces to ESH-AC-17 (TTL purge) and SKM-AC-33 (staleness recomputation).
  */
 function setupPurge(config: Config, storage: StorageAdapter): NodeJS.Timeout | null {
   const log = getLogger();
@@ -65,28 +67,34 @@ function setupPurge(config: Config, storage: StorageAdapter): NodeJS.Timeout | n
   const purgeIntervalHours = config.retention.purgeIntervalHours;
   const purgeService = new PurgeService(storage);
 
-  // Startup purge: clean up expired learnings immediately on boot (ESH-AC-17)
-  try {
-    const result = purgeService.purgeExpired(defaultTtlDays);
-    if (result.count > 0) {
-      log.info({ count: result.count }, 'Startup purge: removed expired learnings');
-    }
-  } catch (err) {
-    // Non-fatal: log the error but don't prevent server from starting
-    log.warn({ error: String(err) }, 'Startup purge failed (non-fatal)');
-  }
-
-  // Periodic purge: run on configurable interval (default 24h) (ESH-AC-17)
-  const intervalMs = purgeIntervalHours * 60 * 60 * 1000;
-  const timer = setInterval(() => {
+  /** Run one purge + staleness recomputation cycle. Non-fatal — errors are logged. */
+  const runCycle = async (label: string): Promise<void> => {
+    // TTL purge (ESH-AC-17)
     try {
       const result = purgeService.purgeExpired(defaultTtlDays);
       if (result.count > 0) {
-        log.info({ count: result.count }, 'Periodic purge: removed expired learnings');
+        log.info({ count: result.count }, `${label}: removed expired learnings`);
       }
     } catch (err) {
-      log.warn({ error: String(err) }, 'Periodic purge failed (non-fatal)');
+      log.warn({ error: String(err) }, `${label} purge failed (non-fatal)`);
     }
+
+    // Staleness recomputation (SKM-AC-33): run after purge so deleted learnings
+    // are excluded from the batch update.
+    try {
+      await recomputeAllStalenessScores(storage);
+    } catch (err) {
+      log.warn({ error: String(err) }, `${label} staleness recomputation failed (non-fatal)`);
+    }
+  };
+
+  // Startup cycle: purge + staleness recomputation immediately on boot
+  void runCycle('Startup');
+
+  // Periodic cycle: run on configurable interval (default 24h)
+  const intervalMs = purgeIntervalHours * 60 * 60 * 1000;
+  const timer = setInterval(() => {
+    void runCycle('Periodic');
   }, intervalMs);
 
   // Allow Node.js to exit even if the timer is still pending
@@ -96,7 +104,7 @@ function setupPurge(config: Config, storage: StorageAdapter): NodeJS.Timeout | n
 
   log.info(
     { purgeIntervalHours, defaultTtlDays },
-    'TTL purge scheduled'
+    'TTL purge + staleness recomputation scheduled'
   );
 
   return timer;

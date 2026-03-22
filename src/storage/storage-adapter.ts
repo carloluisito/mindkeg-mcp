@@ -374,6 +374,38 @@ export interface StorageAdapter {
    * Returns the number of conflicts resolved. Traces to SKM-AC-28.
    */
   resolveConflicts(learningId: string, resolvedBy: string): Promise<number>;
+
+  // --- Smart staleness (SKM-AC-33, SKM-AC-34) ---
+
+  /**
+   * Get all active learnings with their unresolved conflict counts.
+   * Used by the staleness engine for batch recomputation.
+   * Graceful degradation: when learning_conflicts has no rows, all
+   * unresolved_conflict_count values will be 0.
+   * Implementation is synchronous (DatabaseSync) but interface uses Promise for consistency.
+   * Traces to SKM-AC-33.
+   */
+  getActiveLearningsWithConflictCounts(): Promise<Array<{
+    id: string;
+    updated_at: string;
+    created_at: string;
+    last_accessed_at: string | null;
+    access_count: number;
+    stale_flag: boolean;
+    staleness_score: number;
+    unresolved_conflict_count: number;
+  }>>;
+
+  /**
+   * Batch update staleness_score and stale_flag for a set of learnings.
+   * Called by the staleness engine after recomputation.
+   * Handles empty arrays gracefully (no-op).
+   * Implementation is synchronous (DatabaseSync) but interface uses Promise for consistency.
+   * Traces to SKM-AC-33, SKM-AC-34.
+   */
+  batchUpdateStaleness(
+    updates: Array<{ id: string; staleness_score: number; stale_flag: boolean }>
+  ): Promise<void>;
 }
 
 // Re-export relationship types for consumers that import from storage-adapter

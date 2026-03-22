@@ -72,6 +72,8 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     storeConflict: vi.fn().mockResolvedValue(undefined),
     getUnresolvedConflicts: vi.fn().mockResolvedValue([]),
     resolveConflicts: vi.fn().mockResolvedValue(0),
+    getActiveLearningsWithConflictCounts: vi.fn().mockResolvedValue([]),
+    batchUpdateStaleness: vi.fn().mockResolvedValue(undefined),
     purgeExpired: vi.fn().mockReturnValue(0),
     purgeByFilter: vi.fn().mockReturnValue(0),
     ...overrides,

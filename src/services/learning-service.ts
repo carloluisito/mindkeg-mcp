@@ -559,7 +559,11 @@ export class LearningService {
       throw new NotFoundError(`Learning not found: ${input.id}`);
     }
 
-    const updated = await this.storage.updateLearning(input.id, { stale_flag: true });
+    // Set stale_flag = true and staleness_score = 1.0 (SKM-AC-36)
+    const updated = await this.storage.updateLearning(input.id, {
+      stale_flag: true,
+      staleness_score: 1.0,
+    });
     if (!updated) {
       throw new NotFoundError(`Learning disappeared during stale flag: ${input.id}`);
     }

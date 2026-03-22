@@ -1313,6 +1313,92 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to resolve conflicts: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Smart staleness (SKM-AC-33, SKM-AC-34)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get all active learnings with their unresolved conflict counts.
+   * Uses LEFT JOIN on learning_conflicts (WHERE resolved=0) with GROUP BY.
+   * When learning_conflicts has no rows, all unresolved_conflict_count values are 0.
+   * Traces to SKM-AC-33.
+   */
+  async getActiveLearningsWithConflictCounts(): Promise<Array<{
+    id: string;
+    updated_at: string;
+    created_at: string;
+    last_accessed_at: string | null;
+    access_count: number;
+    stale_flag: boolean;
+    staleness_score: number;
+    unresolved_conflict_count: number;
+  }>> {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT
+             l.id,
+             l.updated_at,
+             l.created_at,
+             l.last_accessed_at,
+             l.access_count,
+             l.stale_flag,
+             l.staleness_score,
+             COALESCE(COUNT(c.id), 0) AS unresolved_conflict_count
+           FROM learnings l
+           LEFT JOIN learning_conflicts c
+             ON (c.learning_id_a = l.id OR c.learning_id_b = l.id)
+             AND c.resolved = 0
+           WHERE l.status = 'active'
+           GROUP BY l.id`
+        )
+        .all() as Array<{
+          id: string;
+          updated_at: string;
+          created_at: string;
+          last_accessed_at: string | null;
+          access_count: number;
+          stale_flag: number;
+          staleness_score: number;
+          unresolved_conflict_count: number;
+        }>;
+
+      return rows.map((row) => ({
+        id: row.id,
+        updated_at: row.updated_at,
+        created_at: row.created_at,
+        last_accessed_at: row.last_accessed_at ?? null,
+        access_count: row.access_count ?? 0,
+        stale_flag: row.stale_flag === 1,
+        staleness_score: row.staleness_score ?? 0.0,
+        unresolved_conflict_count: row.unresolved_conflict_count ?? 0,
+      }));
+    } catch (err) {
+      throw new StorageError(`Failed to get active learnings with conflict counts: ${String(err)}`, err);
+    }
+  }
+
+  /**
+   * Batch update staleness_score and stale_flag for a set of learnings.
+   * Uses a prepared statement in a transaction for atomicity and performance.
+   * Handles empty array gracefully (no-op). Traces to SKM-AC-33, SKM-AC-34.
+   */
+  async batchUpdateStaleness(
+    updates: Array<{ id: string; staleness_score: number; stale_flag: boolean }>
+  ): Promise<void> {
+    if (updates.length === 0) return;
+    try {
+      const stmt = this.db.prepare(
+        `UPDATE learnings SET staleness_score = ?, stale_flag = ? WHERE id = ?`
+      );
+      for (const update of updates) {
+        stmt.run(update.staleness_score, update.stale_flag ? 1 : 0, update.id);
+      }
+    } catch (err) {
+      throw new StorageError(`Failed to batch update staleness: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

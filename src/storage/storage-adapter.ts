@@ -327,6 +327,15 @@ export interface StorageAdapter {
     scope: { repository: string | null; workspace: string | null },
     minSimilarity: number
   ): Promise<Array<{ id: string; content: string; category: string; embedding: number[]; similarity: number }>>;
+
+  /**
+   * Batch-increment access_count and set last_accessed_at for the given learning IDs.
+   * Implementation is synchronous (node:sqlite DatabaseSync) but interface uses Promise
+   * for consistency with all other StorageAdapter methods.
+   * No-op when learningIds is empty.
+   * SKM-AC-9, SKM-AC-10.
+   */
+  recordAccess(learningIds: string[]): Promise<void>;
 }
 
 /** Aggregate statistics about the learnings database. */
@@ -341,4 +350,10 @@ export interface LearningStats {
   byWorkspace: Array<{ workspace: string | null; count: number }>;
   oldestAt: string | null;
   newestAt: string | null;
+  /** Sum of access_count across all learnings (SKM-AC-16). */
+  totalAccesses: number;
+  /** Average access_count per learning, rounded to two decimal places (SKM-AC-16). */
+  avgAccessCount: number;
+  /** Count of learnings with access_count = 0 (never accessed) (SKM-AC-16). */
+  neverAccessedCount: number;
 }

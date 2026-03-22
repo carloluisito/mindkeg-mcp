@@ -96,6 +96,12 @@ function printStats(stats: LearningStats, dbPath: string): void {
     }
   }
 
+  // Access statistics (SKM-AC-16)
+  console.log('\nAccess Statistics:');
+  console.log(`  Total accesses:       ${stats.totalAccesses}`);
+  console.log(`  Avg access count:     ${stats.avgAccessCount.toFixed(2)}`);
+  console.log(`  Never accessed:       ${stats.neverAccessedCount}/${stats.total}`);
+
   console.log('');
 }
 

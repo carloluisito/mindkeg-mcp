@@ -229,13 +229,25 @@ export class LearningService {
     }
 
     // Annotate each result with its scope (WS-AC-14) and optional integrity check (ESH-AC-27)
-    return results.map((r) => ({
+    const annotated = results.map((r) => ({
       ...r,
       scope: annotateScope(r),
       ...(input.verify_integrity
         ? { integrity_valid: verifyIntegrityHash(r) }
         : {}),
     }));
+
+    // Access tracking (SKM-AC-9, SKM-AC-11 — non-fatal)
+    const resultIds = annotated.map((r) => r.id);
+    if (resultIds.length > 0) {
+      try {
+        await this.storage.recordAccess(resultIds);
+      } catch (accessErr) {
+        getLogger().warn({ error: String(accessErr) }, 'Access tracking in searchLearnings failed (non-fatal)');
+      }
+    }
+
+    return annotated;
   }
 
   // ---------------------------------------------------------------------------
@@ -612,6 +624,22 @@ export class LearningService {
       stale_review: trimmed.stale.map(toRanked),
       ...(nearDuplicates !== undefined ? { near_duplicates: nearDuplicates } : {}),
     };
+
+    // Access tracking (SKM-AC-10, SKM-AC-11 — non-fatal)
+    // OQ-4: stale_review learnings are also considered accessed.
+    const allReturnedIds = [
+      ...trimmed.repo,
+      ...trimmed.workspace,
+      ...trimmed.global,
+      ...trimmed.stale,
+    ].map((l) => l.id);
+    if (allReturnedIds.length > 0) {
+      try {
+        await this.storage.recordAccess(allReturnedIds);
+      } catch (accessErr) {
+        log.warn({ error: String(accessErr) }, 'Access tracking in getContext failed (non-fatal)');
+      }
+    }
 
     log.info(
       {

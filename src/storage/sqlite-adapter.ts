@@ -758,7 +758,10 @@ export class SqliteAdapter implements StorageAdapter {
           COALESCE(SUM(CASE WHEN stale_flag = 1 THEN 1 ELSE 0 END), 0) AS stale,
           COALESCE(SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END), 0) AS with_embeddings,
           MIN(created_at) AS oldest_at,
-          MAX(created_at) AS newest_at
+          MAX(created_at) AS newest_at,
+          COALESCE(SUM(access_count), 0) AS total_accesses,
+          COALESCE(AVG(access_count), 0) AS avg_access_count,
+          COALESCE(SUM(CASE WHEN access_count = 0 THEN 1 ELSE 0 END), 0) AS never_accessed_count
         FROM learnings
       `).get() as {
         total: number;
@@ -768,6 +771,9 @@ export class SqliteAdapter implements StorageAdapter {
         with_embeddings: number;
         oldest_at: string | null;
         newest_at: string | null;
+        total_accesses: number;
+        avg_access_count: number;
+        never_accessed_count: number;
       };
       const totals = rawTotals;
 
@@ -803,6 +809,9 @@ export class SqliteAdapter implements StorageAdapter {
         byWorkspace,
         oldestAt: totals.oldest_at,
         newestAt: totals.newest_at,
+        totalAccesses: totals.total_accesses,
+        avgAccessCount: Math.round(totals.avg_access_count * 100) / 100,
+        neverAccessedCount: totals.never_accessed_count,
       };
     } catch (err) {
       throw new StorageError(`Failed to get stats: ${String(err)}`, err);
@@ -1136,6 +1145,31 @@ export class SqliteAdapter implements StorageAdapter {
       return results;
     } catch (err) {
       throw new StorageError(`Failed to find scoped neighbors: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Access tracking (SKM-AC-9, SKM-AC-10)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Batch-increment access_count and set last_accessed_at for all given learning IDs.
+   * Uses a single parameterized UPDATE ... WHERE id IN (...) for efficiency.
+   * No-op when learningIds is empty.
+   * Non-fatal by convention: callers must wrap in try/catch and log on error.
+   * Traces to SKM-AC-9, SKM-AC-10.
+   */
+  async recordAccess(learningIds: string[]): Promise<void> {
+    if (learningIds.length === 0) return;
+    try {
+      const placeholders = learningIds.map(() => '?').join(', ');
+      this.db
+        .prepare(
+          `UPDATE learnings SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id IN (${placeholders})`
+        )
+        .run(...learningIds);
+    } catch (err) {
+      throw new StorageError(`Failed to record access: ${String(err)}`, err);
     }
   }
 }

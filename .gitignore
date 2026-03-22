@@ -40,3 +40,7 @@ coverage/
 
 # FastEmbed ONNX model cache (downloaded on first use)
 local_cache/
+
+# Internal specs and plans (not published)
+specs/
+plans/

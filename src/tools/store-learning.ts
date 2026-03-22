@@ -81,7 +81,7 @@ export function registerStoreLearning(
         // Authenticate before executing (AC-21)
         await authenticate(getApiKey(), storage, args.repository ?? null);
 
-        const { learning, auto_categorized } = await learningService.storeLearning({
+        const { learning, auto_categorized, conflicts } = await learningService.storeLearning({
           content: args.content,
           category: args.category ?? null,
           tags: args.tags,
@@ -131,6 +131,13 @@ export function registerStoreLearning(
                   embedding_generated: learning.embedding !== null,
                 },
                 auto_categorized,
+                // SKM-AC-26: include detected conflicts in response
+                conflicts: conflicts.map((c) => ({
+                  conflict_id: c.id,
+                  conflicting_learning_id: c.learning_id_a === learning.id ? c.learning_id_b : c.learning_id_a,
+                  similarity: c.similarity,
+                  conflict_type: c.conflict_type,
+                })),
               }, null, 2),
             },
           ],

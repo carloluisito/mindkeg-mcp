@@ -69,6 +69,9 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     recordAccess: vi.fn().mockResolvedValue(undefined),
     createRelationship: vi.fn().mockResolvedValue({}),
     getRelationships: vi.fn().mockResolvedValue([]),
+    storeConflict: vi.fn().mockResolvedValue(undefined),
+    getUnresolvedConflicts: vi.fn().mockResolvedValue([]),
+    resolveConflicts: vi.fn().mockResolvedValue(0),
     purgeExpired: vi.fn().mockReturnValue(0),
     purgeByFilter: vi.fn().mockReturnValue(0),
     ...overrides,
@@ -211,8 +214,8 @@ describe('LearningService autoCategorize behavior', () => {
 
     expect(result.auto_categorized).toBe(false);
     expect(result.learning.category).toBe('architecture');
-    // findScopedNeighbors should NOT be called when category is explicit
-    expect(storage.findScopedNeighbors).not.toHaveBeenCalled();
+    // findScopedNeighbors IS called once for conflict detection (SKM-AC-22) even when category is explicit
+    expect(storage.findScopedNeighbors).toHaveBeenCalledOnce();
   });
 
   it('SKM-AC-17, SKM-AC-20: omitting category triggers auto-categorization, auto_categorized=true', async () => {
@@ -234,7 +237,8 @@ describe('LearningService autoCategorize behavior', () => {
 
     expect(result.auto_categorized).toBe(true);
     expect(result.learning.category).toBe('gotchas');
-    expect(storage.findScopedNeighbors).toHaveBeenCalledOnce();
+    // Called twice: once for auto-categorization (threshold=0.0), once for conflict detection (threshold=0.85)
+    expect(storage.findScopedNeighbors).toHaveBeenCalledTimes(2);
   });
 
   it('SKM-AC-17: null category triggers auto-categorization', async () => {

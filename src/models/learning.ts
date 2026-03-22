@@ -421,6 +421,33 @@ export interface RankedLearning {
 }
 
 /**
+ * A conflict record as stored in the learning_conflicts table.
+ * Traces to SKM-AC-25.
+ */
+export interface ConflictRecord {
+  id: string;
+  learning_id_a: string;
+  learning_id_b: string;
+  similarity: number;
+  conflict_type: string;
+  resolved: boolean;
+  resolved_by: string | null;
+  created_at: string;
+}
+
+/**
+ * Input for creating a conflict record.
+ * Traces to SKM-AC-25.
+ */
+export interface CreateConflictRecord {
+  id: string;
+  learning_id_a: string;
+  learning_id_b: string;
+  similarity: number;
+  conflict_type: string;
+}
+
+/**
  * A group of near-duplicate learnings surfaced by get_context.
  * Traces to GC-AC-26.
  */
@@ -456,6 +483,8 @@ export interface GetContextResult {
   stale_review: RankedLearning[];
   /** Near-duplicate groups, if any (GC-AC-26). */
   near_duplicates?: DuplicateGroup[];
+  /** Unresolved conflicts among returned learnings, if any (SKM-AC-27). */
+  conflicts?: ConflictRecord[];
   /**
    * Map of learning ID → direct relationships (outgoing and incoming).
    * Present when at least one relationship exists among returned learnings (SKM-AC-42).

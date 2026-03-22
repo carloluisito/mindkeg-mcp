@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import type { EmbeddingService } from './embedding-service.js';
-import type { Learning, LearningWithScore, LearningCategory, RelationshipRecord } from '../models/learning.js';
+import type { Learning, LearningWithScore, LearningCategory, RelationshipRecord, ConflictRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 import {
   CreateLearningInputSchema,
@@ -31,6 +31,7 @@ import type { BudgetPreset } from './budget.js';
 import { cosineSimilarity } from '../storage/sqlite-adapter.js';
 import type { DuplicateCandidate } from '../storage/storage-adapter.js';
 import { computeIntegrityHash, verifyIntegrityHash } from '../security/integrity.js';
+import { detectConflicts, CONFLICT_SIMILARITY_THRESHOLD } from './conflict-detector.js';
 import type { z } from 'zod';
 
 /** Raw input type for storeLearning (pre-validation). */
@@ -59,11 +60,13 @@ export interface DeleteResult {
   id: string;
 }
 
-/** Result of storing a learning, including auto-categorization metadata (SKM-AC-20). */
+/** Result of storing a learning, including auto-categorization metadata and detected conflicts. */
 export interface StoreLearningResult {
   learning: Learning;
   /** True when category was auto-assigned via KNN voting (SKM-AC-20). */
   auto_categorized: boolean;
+  /** Detected conflicts between the new learning and existing ones (SKM-AC-26). */
+  conflicts: ConflictRecord[];
 }
 
 export class LearningService {
@@ -193,25 +196,81 @@ export class LearningService {
       ttl_days: input.ttl_days,
     });
 
-    // 5. Duplicate detection: compare against same-scope learnings (GC-AC-25).
-    // Only runs when the learning has an embedding; non-fatal on failure.
+    const scope = { repository: normalizedRepository, workspace: normalizedWorkspace };
+
+    // 5. Conflict detection + duplicate detection (SKM-AC-22, GC-AC-25).
+    // Both run only when an embedding is available; both are non-fatal on failure.
+    let detectedConflicts: ConflictRecord[] = [];
     if (embeddingVector !== null) {
+      // 5a. Conflict detection: scan for same-scope neighbors above the conflict threshold
+      //     (SKM-AC-22 through SKM-AC-24, SKM-AC-29). Excludes the just-created learning itself.
       try {
-        await this.storage.checkAndStoreDuplicates(id, embeddingVector, {
-          repository: normalizedRepository,
-          workspace: normalizedWorkspace,
-        });
+        let neighbors = await this.storage.findScopedNeighbors(
+          embeddingVector,
+          scope,
+          CONFLICT_SIMILARITY_THRESHOLD
+        );
+        // Exclude the just-created learning itself from the neighbors list
+        neighbors = neighbors.filter((n) => n.id !== id);
+
+        if (neighbors.length > 0) {
+          const conflictCandidates = detectConflicts(
+            input.content,
+            input.tags,
+            resolvedCategory,
+            neighbors
+          );
+
+          for (const candidate of conflictCandidates) {
+            const conflictRecord = {
+              id: randomUUID(),
+              learning_id_a: id,
+              learning_id_b: candidate.learning_id,
+              similarity: candidate.similarity,
+              conflict_type: candidate.conflict_type,
+            };
+            await this.storage.storeConflict(conflictRecord);
+            // Resolve stored pair ordering (adapter enforces id_a < id_b)
+            const idA = id < candidate.learning_id ? id : candidate.learning_id;
+            const idB = id < candidate.learning_id ? candidate.learning_id : id;
+            detectedConflicts.push({
+              id: conflictRecord.id,
+              learning_id_a: idA,
+              learning_id_b: idB,
+              similarity: candidate.similarity,
+              conflict_type: candidate.conflict_type,
+              resolved: false,
+              resolved_by: null,
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (conflictErr) {
+        log.warn({ error: String(conflictErr) }, 'Conflict detection failed (non-fatal)');
+        detectedConflicts = [];
+      }
+
+      // 5b. Duplicate detection: compare against same-scope learnings (GC-AC-25).
+      try {
+        await this.storage.checkAndStoreDuplicates(id, embeddingVector, scope);
       } catch (dupErr) {
         log.warn({ error: String(dupErr) }, 'Duplicate detection failed (non-fatal)');
       }
     }
 
     log.info(
-      { id: learning.id, category: resolvedCategory, auto_categorized: autoCategorized, repository: normalizedRepository, workspace: normalizedWorkspace },
+      {
+        id: learning.id,
+        category: resolvedCategory,
+        auto_categorized: autoCategorized,
+        repository: normalizedRepository,
+        workspace: normalizedWorkspace,
+        conflicts_detected: detectedConflicts.length,
+      },
       'Learning stored'
     );
 
-    return { learning, auto_categorized: autoCategorized };
+    return { learning, auto_categorized: autoCategorized, conflicts: detectedConflicts };
   }
 
   // ---------------------------------------------------------------------------
@@ -431,6 +490,13 @@ export class LearningService {
       await this.storage.cleanupDuplicateCandidates(input.id);
     } catch (dupErr) {
       getLogger().warn({ error: String(dupErr) }, 'Cleanup of duplicate candidates on deprecate failed (non-fatal)');
+    }
+
+    // Resolve any conflicts involving the deprecated learning (SKM-AC-28)
+    try {
+      await this.storage.resolveConflicts(input.id, input.id);
+    } catch (conflictErr) {
+      getLogger().warn({ error: String(conflictErr) }, 'Conflict resolution on deprecate failed (non-fatal)');
     }
 
     getLogger().info({ id: updated.id, reason: input.reason }, 'Learning deprecated');
@@ -745,7 +811,20 @@ export class LearningService {
       }
     }
 
-    // 11. Fetch relationships for all returned learning IDs (SKM-AC-42)
+    // 11a. Fetch unresolved conflicts for all returned learning IDs (SKM-AC-27)
+    let unresolvedConflicts: ConflictRecord[] | undefined;
+    if (allReturnedIds.length > 0) {
+      try {
+        const conflicts = await this.storage.getUnresolvedConflicts(allReturnedIds);
+        if (conflicts.length > 0) {
+          unresolvedConflicts = conflicts;
+        }
+      } catch (conflictErr) {
+        log.warn({ error: String(conflictErr) }, 'Conflict surfacing in getContext failed (non-fatal)');
+      }
+    }
+
+    // 11b. Fetch relationships for all returned learning IDs (SKM-AC-42)
     // Includes stale_review IDs since they are also returned to the agent
     let relationshipsMap: GetContextResult['relationships'];
     if (allReturnedIds.length > 0) {
@@ -766,6 +845,7 @@ export class LearningService {
       global_learnings: trimmed.global.map(toRanked),
       stale_review: trimmed.stale.map(toRanked),
       ...(nearDuplicates !== undefined ? { near_duplicates: nearDuplicates } : {}),
+      ...(unresolvedConflicts !== undefined ? { conflicts: unresolvedConflicts } : {}),
       ...(relationshipsMap !== undefined ? { relationships: relationshipsMap } : {}),
     };
 

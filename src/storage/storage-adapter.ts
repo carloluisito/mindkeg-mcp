@@ -3,7 +3,7 @@
  * This abstraction allows the business logic layer to remain backend-agnostic.
  * Traces to AC-24, AC-25, AC-26.
  */
-import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord } from '../models/learning.js';
+import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord, ConflictRecord, CreateConflictRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 
 /**
@@ -352,10 +352,34 @@ export interface StorageAdapter {
    * Used to attach relationship data to search results (SKM-AC-41) and get_context (SKM-AC-42).
    */
   getRelationships(learningIds: string[]): Promise<RelationshipRecord[]>;
+
+  // --- Conflict detection (SKM-AC-25, SKM-AC-27, SKM-AC-28) ---
+
+  /**
+   * Store a conflict pair. Enforces pair ordering (learning_id_a < learning_id_b).
+   * Uses INSERT OR IGNORE to handle the unique pair constraint gracefully.
+   * Traces to SKM-AC-25.
+   */
+  storeConflict(record: CreateConflictRecord): Promise<void>;
+
+  /**
+   * Get all unresolved conflicts involving any of the given learning IDs.
+   * Returns empty array if learningIds is empty. Traces to SKM-AC-27.
+   */
+  getUnresolvedConflicts(learningIds: string[]): Promise<ConflictRecord[]>;
+
+  /**
+   * Mark all unresolved conflicts involving the given learning ID as resolved.
+   * Sets resolved=true and resolved_by to the provided value.
+   * Returns the number of conflicts resolved. Traces to SKM-AC-28.
+   */
+  resolveConflicts(learningId: string, resolvedBy: string): Promise<number>;
 }
 
 // Re-export relationship types for consumers that import from storage-adapter
 export type { RelationshipRecord, CreateRelationshipRecord };
+// Re-export conflict types for consumers that import from storage-adapter
+export type { ConflictRecord, CreateConflictRecord };
 
 /** Aggregate statistics about the learnings database. */
 export interface LearningStats {

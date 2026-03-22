@@ -28,7 +28,7 @@ import type {
   GetContextData,
   DuplicateCandidate,
 } from './storage-adapter.js';
-import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord } from '../models/learning.js';
+import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord, ConflictRecord, CreateConflictRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 import { StorageError } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
@@ -1242,6 +1242,77 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to get relationships: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Conflict detection (SKM-AC-25, SKM-AC-27, SKM-AC-28)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Store a conflict pair. Enforces pair ordering: smaller ID goes in learning_id_a.
+   * Uses INSERT OR IGNORE so duplicate pairs (same type) are silently skipped.
+   * Traces to SKM-AC-25.
+   */
+  async storeConflict(record: CreateConflictRecord): Promise<void> {
+    // Enforce pair ordering: learning_id_a < learning_id_b (lexicographic)
+    const idA = record.learning_id_a < record.learning_id_b
+      ? record.learning_id_a
+      : record.learning_id_b;
+    const idB = record.learning_id_a < record.learning_id_b
+      ? record.learning_id_b
+      : record.learning_id_a;
+    try {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO learning_conflicts
+           (id, learning_id_a, learning_id_b, similarity, conflict_type, resolved, resolved_by, created_at)
+           VALUES (?, ?, ?, ?, ?, 0, NULL, datetime('now'))`
+        )
+        .run(record.id, idA, idB, record.similarity, record.conflict_type);
+    } catch (err) {
+      throw new StorageError(`Failed to store conflict: ${String(err)}`, err);
+    }
+  }
+
+  /**
+   * Get all unresolved conflicts involving any of the given learning IDs.
+   * Returns empty array when learningIds is empty. Traces to SKM-AC-27.
+   */
+  async getUnresolvedConflicts(learningIds: string[]): Promise<ConflictRecord[]> {
+    if (learningIds.length === 0) return [];
+    try {
+      const placeholders = learningIds.map(() => '?').join(', ');
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM learning_conflicts
+           WHERE resolved = 0
+             AND (learning_id_a IN (${placeholders}) OR learning_id_b IN (${placeholders}))
+           ORDER BY created_at DESC`
+        )
+        .all(...learningIds, ...learningIds) as RawConflictRow[];
+      return rows.map(rowToConflict);
+    } catch (err) {
+      throw new StorageError(`Failed to get unresolved conflicts: ${String(err)}`, err);
+    }
+  }
+
+  /**
+   * Mark all unresolved conflicts involving the given learning ID as resolved.
+   * Returns the number of rows updated. Traces to SKM-AC-28.
+   */
+  async resolveConflicts(learningId: string, resolvedBy: string): Promise<number> {
+    try {
+      const result = this.db
+        .prepare(
+          `UPDATE learning_conflicts
+           SET resolved = 1, resolved_by = ?
+           WHERE (learning_id_a = ? OR learning_id_b = ?) AND resolved = 0`
+        )
+        .run(resolvedBy, learningId, learningId);
+      return result.changes;
+    } catch (err) {
+      throw new StorageError(`Failed to resolve conflicts: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,6 +1375,17 @@ interface RawRelationshipRow {
   relationship_type: string;
   created_at: string;
   created_by: string | null;
+}
+
+interface RawConflictRow {
+  id: string;
+  learning_id_a: string;
+  learning_id_b: string;
+  similarity: number;
+  conflict_type: string;
+  resolved: number;
+  resolved_by: string | null;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1386,6 +1468,19 @@ function rowToRelationship(row: RawRelationshipRow): RelationshipRecord {
     relationship_type: row.relationship_type as RelationshipRecord['relationship_type'],
     created_at: row.created_at,
     created_by: row.created_by,
+  };
+}
+
+function rowToConflict(row: RawConflictRow): ConflictRecord {
+  return {
+    id: row.id,
+    learning_id_a: row.learning_id_a,
+    learning_id_b: row.learning_id_b,
+    similarity: row.similarity,
+    conflict_type: row.conflict_type,
+    resolved: row.resolved === 1,
+    resolved_by: row.resolved_by,
+    created_at: row.created_at,
   };
 }
 

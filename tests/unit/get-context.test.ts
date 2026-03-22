@@ -82,6 +82,8 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     cleanupDuplicateCandidates: vi.fn().mockResolvedValue(undefined),
     findScopedNeighbors: vi.fn().mockResolvedValue([]),
     recordAccess: vi.fn().mockResolvedValue(undefined),
+    createRelationship: vi.fn().mockResolvedValue({}),
+    getRelationships: vi.fn().mockResolvedValue([]),
     purgeExpired: vi.fn().mockReturnValue(0),
     purgeByFilter: vi.fn().mockReturnValue(0),
     ...overrides,

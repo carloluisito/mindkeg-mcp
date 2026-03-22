@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import type { EmbeddingService } from './embedding-service.js';
-import type { Learning, LearningWithScore, LearningCategory } from '../models/learning.js';
+import type { Learning, LearningWithScore, LearningCategory, RelationshipRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 import {
   CreateLearningInputSchema,
@@ -294,6 +294,22 @@ export class LearningService {
         await this.storage.recordAccess(resultIds);
       } catch (accessErr) {
         getLogger().warn({ error: String(accessErr) }, 'Access tracking in searchLearnings failed (non-fatal)');
+      }
+    }
+
+    // Attach relationships to each result (SKM-AC-41)
+    if (resultIds.length > 0) {
+      try {
+        const rels = await this.storage.getRelationships(resultIds);
+        if (rels.length > 0) {
+          const relMap = buildRelationshipMap(rels);
+          return annotated.map((r) => {
+            const relsForId = relMap.get(r.id);
+            return relsForId !== undefined ? { ...r, relationships: relsForId } : r;
+          });
+        }
+      } catch (relErr) {
+        getLogger().warn({ error: String(relErr) }, 'Relationship fetch in searchLearnings failed (non-fatal)');
       }
     }
 
@@ -713,15 +729,6 @@ export class LearningService {
         : {}),
     });
 
-    const result: GetContextResult = {
-      summary: contextData.summary,
-      repo_learnings: trimmed.repo.map(toRanked),
-      workspace_learnings: trimmed.workspace.map(toRanked),
-      global_learnings: trimmed.global.map(toRanked),
-      stale_review: trimmed.stale.map(toRanked),
-      ...(nearDuplicates !== undefined ? { near_duplicates: nearDuplicates } : {}),
-    };
-
     // Access tracking (SKM-AC-10, SKM-AC-11 — non-fatal)
     // OQ-4: stale_review learnings are also considered accessed.
     const allReturnedIds = [
@@ -737,6 +744,30 @@ export class LearningService {
         log.warn({ error: String(accessErr) }, 'Access tracking in getContext failed (non-fatal)');
       }
     }
+
+    // 11. Fetch relationships for all returned learning IDs (SKM-AC-42)
+    // Includes stale_review IDs since they are also returned to the agent
+    let relationshipsMap: GetContextResult['relationships'];
+    if (allReturnedIds.length > 0) {
+      try {
+        const rels = await this.storage.getRelationships(allReturnedIds);
+        if (rels.length > 0) {
+          relationshipsMap = Object.fromEntries(buildRelationshipMap(rels));
+        }
+      } catch (relErr) {
+        log.warn({ error: String(relErr) }, 'Relationship fetch in getContext failed (non-fatal)');
+      }
+    }
+
+    const result: GetContextResult = {
+      summary: contextData.summary,
+      repo_learnings: trimmed.repo.map(toRanked),
+      workspace_learnings: trimmed.workspace.map(toRanked),
+      global_learnings: trimmed.global.map(toRanked),
+      stale_review: trimmed.stale.map(toRanked),
+      ...(nearDuplicates !== undefined ? { near_duplicates: nearDuplicates } : {}),
+      ...(relationshipsMap !== undefined ? { relationships: relationshipsMap } : {}),
+    };
 
     log.info(
       {
@@ -756,6 +787,38 @@ export class LearningService {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build a Map from learning ID to its annotated relationships array.
+ * Each relationship record produces two entries: one for the source (outgoing)
+ * and one for the target (incoming). Only IDs with relationships are included.
+ * Traces to SKM-AC-41, SKM-AC-42.
+ */
+function buildRelationshipMap(
+  rels: RelationshipRecord[]
+): Map<string, Array<{ type: RelationshipRecord['relationship_type']; related_id: string; direction: 'outgoing' | 'incoming' }>> {
+  const map = new Map<string, Array<{ type: RelationshipRecord['relationship_type']; related_id: string; direction: 'outgoing' | 'incoming' }>>();
+
+  for (const rel of rels) {
+    // Outgoing: source_id → target_id
+    if (!map.has(rel.source_id)) map.set(rel.source_id, []);
+    map.get(rel.source_id)!.push({
+      type: rel.relationship_type,
+      related_id: rel.target_id,
+      direction: 'outgoing',
+    });
+
+    // Incoming: target_id ← source_id
+    if (!map.has(rel.target_id)) map.set(rel.target_id, []);
+    map.get(rel.target_id)!.push({
+      type: rel.relationship_type,
+      related_id: rel.source_id,
+      direction: 'incoming',
+    });
+  }
+
+  return map;
+}
 
 /**
  * Build DuplicateGroup objects from raw duplicate_candidates rows.

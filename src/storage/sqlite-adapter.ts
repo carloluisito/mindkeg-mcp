@@ -28,7 +28,7 @@ import type {
   GetContextData,
   DuplicateCandidate,
 } from './storage-adapter.js';
-import type { Learning, LearningWithScore } from '../models/learning.js';
+import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 import { StorageError } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
@@ -1172,6 +1172,76 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to record access: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Learning Relationships (SKM-AC-38, SKM-AC-39, SKM-AC-40, SKM-AC-44, SKM-AC-46)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a typed relationship between two learnings.
+   * FK cascade delete on the learnings table handles cleanup when a learning is deleted (SKM-AC-44).
+   * Traces to SKM-AC-38, SKM-AC-39, SKM-AC-40, SKM-AC-44, SKM-AC-46.
+   */
+  async createRelationship(record: CreateRelationshipRecord): Promise<RelationshipRecord> {
+    const now = new Date().toISOString();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO learning_relationships
+           (id, source_id, target_id, relationship_type, created_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          record.id,
+          record.source_id,
+          record.target_id,
+          record.relationship_type,
+          now,
+          record.created_by ?? null
+        );
+
+      return {
+        id: record.id,
+        source_id: record.source_id,
+        target_id: record.target_id,
+        relationship_type: record.relationship_type,
+        created_at: now,
+        created_by: record.created_by ?? null,
+      };
+    } catch (err) {
+      const msg = String(err);
+      // UNIQUE constraint violation means a duplicate relationship already exists (SKM-AC-40)
+      if (msg.includes('UNIQUE constraint failed') || msg.includes('unique constraint')) {
+        throw new StorageError(
+          `Relationship of type '${record.relationship_type}' already exists between these learnings`,
+          err
+        );
+      }
+      throw new StorageError(`Failed to create relationship: ${msg}`, err);
+    }
+  }
+
+  /**
+   * Get all relationships for the given learning IDs (both as source and target).
+   * Returns an empty array if learningIds is empty.
+   * Traces to SKM-AC-41, SKM-AC-42.
+   */
+  async getRelationships(learningIds: string[]): Promise<RelationshipRecord[]> {
+    if (learningIds.length === 0) return [];
+    try {
+      const placeholders = learningIds.map(() => '?').join(', ');
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM learning_relationships
+           WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})
+           ORDER BY created_at ASC`
+        )
+        .all(...learningIds, ...learningIds) as RawRelationshipRow[];
+      return rows.map(rowToRelationship);
+    } catch (err) {
+      throw new StorageError(`Failed to get relationships: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,6 +1295,15 @@ interface RawDuplicateCandidateRow {
   scope: string;
   scope_value: string | null;
   created_at: string;
+}
+
+interface RawRelationshipRow {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relationship_type: string;
+  created_at: string;
+  created_by: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,6 +1375,17 @@ function rowToDuplicateCandidate(row: RawDuplicateCandidateRow): DuplicateCandid
     scope: row.scope as DuplicateCandidate['scope'],
     scope_value: row.scope_value,
     created_at: row.created_at,
+  };
+}
+
+function rowToRelationship(row: RawRelationshipRow): RelationshipRecord {
+  return {
+    id: row.id,
+    source_id: row.source_id,
+    target_id: row.target_id,
+    relationship_type: row.relationship_type as RelationshipRecord['relationship_type'],
+    created_at: row.created_at,
+    created_by: row.created_by,
   };
 }
 

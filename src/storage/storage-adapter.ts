@@ -3,7 +3,7 @@
  * This abstraction allows the business logic layer to remain backend-agnostic.
  * Traces to AC-24, AC-25, AC-26.
  */
-import type { Learning, LearningWithScore } from '../models/learning.js';
+import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
 
 /**
@@ -336,7 +336,26 @@ export interface StorageAdapter {
    * SKM-AC-9, SKM-AC-10.
    */
   recordAccess(learningIds: string[]): Promise<void>;
+
+  // --- Learning Relationships (SKM-AC-38, SKM-AC-39) ---
+
+  /**
+   * Create a typed relationship between two learnings.
+   * Returns the created relationship record (SKM-AC-46).
+   * Throws StorageError if a duplicate relationship exists (SKM-AC-40).
+   */
+  createRelationship(record: CreateRelationshipRecord): Promise<RelationshipRecord>;
+
+  /**
+   * Get all relationships for the given learning IDs (both as source and target).
+   * Returns an empty array if learningIds is empty.
+   * Used to attach relationship data to search results (SKM-AC-41) and get_context (SKM-AC-42).
+   */
+  getRelationships(learningIds: string[]): Promise<RelationshipRecord[]>;
 }
+
+// Re-export relationship types for consumers that import from storage-adapter
+export type { RelationshipRecord, CreateRelationshipRecord };
 
 /** Aggregate statistics about the learnings database. */
 export interface LearningStats {

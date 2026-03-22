@@ -5,6 +5,47 @@
 import { z } from 'zod';
 import { stripControlChars } from '../security/sanitize.js';
 
+// ---------------------------------------------------------------------------
+// Learning Relationships (SKM-AC-38)
+// ---------------------------------------------------------------------------
+
+/** The four allowed relationship types between learnings (SKM-AC-38). */
+export const RELATIONSHIP_TYPES = ['supersedes', 'depends_on', 'related_to', 'caused_by'] as const;
+export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];
+
+/** A relationship record as stored in and returned from the database (SKM-AC-38). */
+export interface RelationshipRecord {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relationship_type: RelationshipType;
+  created_at: string;
+  created_by: string | null;
+}
+
+/** Input for creating a new relationship in storage. */
+export interface CreateRelationshipRecord {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relationship_type: RelationshipType;
+  created_by?: string | null;
+}
+
+/** Zod schema for the relate_learnings tool input (SKM-AC-39). */
+export const RelateLearningsInputSchema = z.object({
+  /** UUID of the source learning (the one that has the relationship). */
+  source_id: z.string().uuid(),
+  /** UUID of the target learning (the one being related to). */
+  target_id: z.string().uuid(),
+  /** Type of relationship between the two learnings. */
+  relationship_type: z.enum(RELATIONSHIP_TYPES),
+  /** Optional provenance: which agent created this relationship. */
+  created_by: z.string().optional(),
+});
+
+export type RelateLearningsInput = z.infer<typeof RelateLearningsInputSchema>;
+
 /** The six allowed learning categories (AC-13). */
 export const LEARNING_CATEGORIES = [
   'architecture',
@@ -60,6 +101,15 @@ export interface LearningWithScore extends Learning {
    * Null when no integrity_hash is stored (legacy learning). (ESH-AC-27)
    */
   integrity_valid?: boolean | null;
+  /**
+   * Direct relationships for this learning (both outgoing and incoming).
+   * Present when relationships exist; omitted when there are none (SKM-AC-41).
+   */
+  relationships?: Array<{
+    type: RelationshipType;
+    related_id: string;
+    direction: 'outgoing' | 'incoming';
+  }>;
 }
 
 /** Zod schema for creating a new learning (AC-1, AC-6, AC-13, AC-14, AC-15). */
@@ -406,4 +456,13 @@ export interface GetContextResult {
   stale_review: RankedLearning[];
   /** Near-duplicate groups, if any (GC-AC-26). */
   near_duplicates?: DuplicateGroup[];
+  /**
+   * Map of learning ID → direct relationships (outgoing and incoming).
+   * Present when at least one relationship exists among returned learnings (SKM-AC-42).
+   */
+  relationships?: Record<string, Array<{
+    type: RelationshipType;
+    related_id: string;
+    direction: 'outgoing' | 'incoming';
+  }>>;
 }

@@ -32,6 +32,7 @@ Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre
 - API key authentication with per-repository access control
 - SQLite storage (zero dependencies, zero config)
 - Import/export for backup and migration
+- **Smarter knowledge management**: auto-categorization (KNN voting), conflict detection, smart staleness scoring, access tracking with relevance decay, near-duplicate merging, typed learning relationships
 - **Enterprise security**: encryption at rest, audit logging, TTL/data retention, Prometheus monitoring, rate limiting, content integrity verification
 
 ## Quick Start
@@ -171,6 +172,8 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 | `deprecate_learning` | Mark a learning as deprecated                        |
 | `flag_stale`         | Flag a learning as potentially outdated               |
 | `delete_learning`    | Permanently delete a learning                        |
+| `merge_learnings`    | Merge near-duplicate learnings into a canonical entry |
+| `relate_learnings`   | Create typed relationships between learnings          |
 | `list_repositories`  | List all repositories with learning counts           |
 | `list_workspaces`    | List all workspaces with learning counts             |
 
@@ -258,7 +261,7 @@ Disables semantic search and falls back to SQLite FTS5 full-text search — all 
 
 ## Enterprise Security
 
-Mind Keg 0.4.0 ships a suite of security features suitable for corporate and regulated environments.
+Mind Keg ships a suite of security features suitable for corporate and regulated environments.
 
 ### Encryption at Rest
 
@@ -379,6 +382,9 @@ Each learning contains:
 | `ttl_days`        | integer or null   | Per-learning TTL; overrides global `MINDKEG_DEFAULT_TTL_DAYS` |
 | `source_agent`    | string or null    | Agent name for provenance tracking                          |
 | `integrity_hash`  | string or null    | SHA-256 hash of canonical fields for tamper detection       |
+| `access_count`    | integer           | Times returned by search/get_context (feeds ranking)        |
+| `last_accessed_at`| ISO 8601 or null  | Last time returned by search/get_context                    |
+| `staleness_score` | float 0.0–1.0     | Auto-computed from age, access recency, and conflicts       |
 | `created_at`      | ISO 8601          | Auto-set on creation                                        |
 | `updated_at`      | ISO 8601          | Auto-updated on modification; TTL expiry anchors to this    |
 
@@ -457,8 +463,8 @@ src/
   crypto/           AES-256-GCM field encryption
   monitoring/       Prometheus metrics + /health endpoint
   security/         Content sanitization, integrity hashing, rate limiter
-  tools/            One file per MCP tool (9 tools) + shared tool-utils
-  services/         LearningService + EmbeddingService + PurgeService
+  tools/            One file per MCP tool (11 tools) + shared tool-utils
+  services/         LearningService + EmbeddingService + PurgeService + ConflictDetector + StalenessEngine
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types
   utils/            Logger (pino → stderr) + error classes

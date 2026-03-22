@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-03-23
+
+### Added
+- **Merge duplicates**: `merge_learnings` MCP tool resolves near-duplicate learnings into a single canonical entry, with optional content rewriting; duplicates are deprecated to preserve history
+- **Learning relationships**: `relate_learnings` MCP tool creates typed directed edges (`supersedes`, `depends_on`, `related_to`, `caused_by`) between learnings; surfaced in `search_learnings` and `get_context` results
+- **Access tracking**: `access_count` and `last_accessed_at` updated on every search/get_context hit; access statistics added to `mindkeg stats`
+- **Auto-categorization**: `category` is now optional in `store_learning`; KNN voting (K=5) infers category from same-scope neighbors; response includes `auto_categorized: boolean`
+- **Conflict detection**: keyword-heuristic contradiction detection on store — flags opposing negation/assertion keywords between semantically similar learnings (cosine similarity >= 0.85, same category); auto-resolved on deprecation
+- **Smart staleness scoring**: continuous `staleness_score` (0.0-1.0) from age (30%), access recency (40%), and conflicts (30%); recomputed periodically; auto-flags at >= 0.7
+- **Relevance decay ranking**: 8-key sort with access frequency, access recency, and continuous staleness score signals
+- **Consolidated scope scan**: single `findScopedNeighbors` scan shared by dedup, conflict detection, and auto-categorization
+- Database migration 004: `access_count`, `last_accessed_at`, `staleness_score` columns; `learning_conflicts` and `learning_relationships` tables
+
+### Changed
+- `store_learning` returns `{ learning, auto_categorized, conflicts }` instead of the learning directly (**breaking**)
+- `category` is now optional in `store_learning` (**breaking** — omitting triggers auto-categorization instead of validation error)
+- `search_learnings` and `get_context` results include access, staleness, relationship, and conflict data
+- MCP tool count: 9 → 11
+
 ## [0.4.0] - 2026-03-16
 
 ### Added

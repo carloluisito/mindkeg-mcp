@@ -30,6 +30,11 @@ import { ValidationError, NotFoundError } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
 import type { z } from 'zod';
 
+/** Normalize Windows backslash paths to forward slashes for consistent storage/query. */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 /** Gotcha cosine similarity threshold for deduplication (AMU-AC-12, AMU-AC-30). */
 const GOTCHA_SIMILARITY_THRESHOLD = 0.85;
 
@@ -121,7 +126,7 @@ export class EntityService {
 
     return this.storage.createDecision({
       id: randomUUID(),
-      repository: data.repository,
+      repository: normalizePath(data.repository),
       category: data.category,
       choice: data.choice,
       rationale: data.rationale,
@@ -137,7 +142,7 @@ export class EntityService {
     if (!repository) {
       throw new ValidationError('repository is required');
     }
-    return this.storage.getDecisions(repository, category);
+    return this.storage.getDecisions(normalizePath(repository), category);
   }
 
   /**
@@ -186,7 +191,7 @@ export class EntityService {
 
     return this.storage.createFinding({
       id: randomUUID(),
-      repository: data.repository,
+      repository: normalizePath(data.repository),
       file_path: data.file_path,
       severity: data.severity,
       issue: data.issue,
@@ -226,7 +231,7 @@ export class EntityService {
     if (!repository) {
       throw new ValidationError('repository is required');
     }
-    return this.storage.getOpenFindings(repository, severity);
+    return this.storage.getOpenFindings(normalizePath(repository), severity);
   }
 
   // ---------------------------------------------------------------------------
@@ -280,7 +285,7 @@ export class EntityService {
         // No similar gotcha — create new with embedding
         const gotcha = await this.storage.createGotcha({
           id: randomUUID(),
-          repository: data.repository,
+          repository: normalizePath(data.repository),
           description: data.description,
           tags: data.tags,
           technology: data.technology ?? null,
@@ -309,7 +314,7 @@ export class EntityService {
     // No match — create new gotcha without embedding
     const gotcha = await this.storage.createGotcha({
       id: randomUUID(),
-      repository: data.repository,
+      repository: normalizePath(data.repository),
       description: data.description,
       tags: data.tags,
       technology: data.technology ?? null,
@@ -326,7 +331,7 @@ export class EntityService {
     if (!repository) {
       throw new ValidationError('repository is required');
     }
-    return this.storage.getGotchas(repository, technology);
+    return this.storage.getGotchas(normalizePath(repository), technology);
   }
 
   // ---------------------------------------------------------------------------
@@ -345,7 +350,7 @@ export class EntityService {
 
     return this.storage.createRunSummary({
       id: randomUUID(),
-      repository: data.repository,
+      repository: normalizePath(data.repository),
       summary: data.summary,
       files_changed: data.files_changed ?? [],
       outcome: data.outcome,
@@ -362,7 +367,7 @@ export class EntityService {
       throw new ValidationError('repository is required');
     }
     const clampedLimit = Math.min(Math.max(1, limit), 50);
-    return this.storage.getRunHistory(repository, clampedLimit);
+    return this.storage.getRunHistory(normalizePath(repository), clampedLimit);
   }
 
   // ---------------------------------------------------------------------------
@@ -385,6 +390,10 @@ export class EntityService {
     if (!taskDescription) {
       throw new ValidationError('task_description is required');
     }
+
+    // Normalize path separators — query with both forward and backslash variants
+    // to handle Windows path inconsistencies across different callers
+    repository = repository.replace(/\\/g, '/');
 
     const keywords = extractKeywords(taskDescription);
     const budgetLimit = BUDGET_LIMITS[budget];

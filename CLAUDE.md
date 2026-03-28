@@ -8,7 +8,7 @@ This file provides persistent context for AI agents (Claude Code, Cursor, Windsu
 Mind Keg MCP is a TypeScript/Node.js MCP server that stores, searches, and retrieves atomic developer learnings.
 It is designed to give AI agents persistent memory across sessions.
 
-- **Version**: 0.6.0
+- **Version**: 0.6.1
 - **Runtime**: Node.js >= 22 (uses built-in `node:sqlite`)
 - **Transport**: stdio (local) + HTTP+SSE (remote)
 - **Storage**: SQLite via `node:sqlite` (`DatabaseSync` — synchronous)

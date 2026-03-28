@@ -28,3 +28,16 @@ export {
 } from './learning.js';
 
 export type { Repository } from './repository.js';
+
+// Agent Memory Upgrade (AMU) entities
+export type { Decision, DecisionStatus, CreateDecisionInput, CreateDecisionRecord, UpdateDecisionRecord } from './decision.js';
+export { DECISION_STATUSES, CreateDecisionInputSchema } from './decision.js';
+
+export type { Finding, FindingSeverity, FindingStatus, CreateFindingInput, CreateFindingRecord, UpdateFindingRecord } from './finding.js';
+export { FINDING_SEVERITIES, FINDING_STATUSES, CreateFindingInputSchema } from './finding.js';
+
+export type { Gotcha, CreateGotchaInput, CreateGotchaRecord, UpdateGotchaRecord } from './gotcha.js';
+export { CreateGotchaInputSchema } from './gotcha.js';
+
+export type { RunSummary, RunOutcome, CompleteRunInput, CreateRunSummaryRecord } from './run-summary.js';
+export { RUN_OUTCOMES, CompleteRunInputSchema } from './run-summary.js';

@@ -30,6 +30,10 @@ import type {
 } from './storage-adapter.js';
 import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord, ConflictRecord, CreateConflictRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
+import type { Decision, CreateDecisionRecord, UpdateDecisionRecord } from '../models/decision.js';
+import type { Finding, CreateFindingRecord, UpdateFindingRecord } from '../models/finding.js';
+import type { Gotcha, CreateGotchaRecord, UpdateGotchaRecord } from '../models/gotcha.js';
+import type { RunSummary, CreateRunSummaryRecord } from '../models/run-summary.js';
 import { StorageError } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
 import {
@@ -48,6 +52,10 @@ import {
   upStatements as migration004Statements,
   version as migration004Version,
 } from './migrations/004-smarter-knowledge-management.js';
+import {
+  upStatements as migration005Statements,
+  version as migration005Version,
+} from './migrations/005-agent-memory-entities.js';
 
 // ---------------------------------------------------------------------------
 // node:sqlite loader — lazy to avoid Vite/tsup resolution issues
@@ -261,6 +269,24 @@ export class SqliteAdapter implements StorageAdapter {
         .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
         .run(migration004Version);
       log.info({ migration: migration004Version }, 'Migration 004-smarter-knowledge-management applied');
+    }
+
+    if (currentVersion < migration005Version) {
+      log.info({ migration: migration005Version }, 'Applying migration 005-agent-memory-entities');
+      for (const stmt of migration005Statements) {
+        try {
+          this.db.exec(stmt + ';');
+        } catch (err) {
+          const msg = String(err);
+          if (!msg.includes('already exists') && !msg.includes('duplicate')) {
+            throw new StorageError(`Migration failed on statement: ${stmt}\n${msg}`, err);
+          }
+        }
+      }
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
+        .run(migration005Version);
+      log.info({ migration: migration005Version }, 'Migration 005-agent-memory-entities applied');
     }
   }
 
@@ -1399,6 +1425,460 @@ export class SqliteAdapter implements StorageAdapter {
       throw new StorageError(`Failed to batch update staleness: ${String(err)}`, err);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Decisions (AMU-AC-6, AMU-AC-7, AMU-AC-8)
+  // ---------------------------------------------------------------------------
+
+  async createDecision(record: CreateDecisionRecord): Promise<Decision> {
+    const now = new Date().toISOString();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO decisions (id, repository, category, choice, rationale, made_by, made_at, status, superseded_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)`
+        )
+        .run(
+          record.id,
+          record.repository,
+          record.category,
+          record.choice,
+          record.rationale,
+          record.made_by ?? null,
+          now,
+          now,
+          now
+        );
+      const decision = this.getDecisionSync(record.id);
+      if (!decision) throw new StorageError('Decision not found immediately after insert');
+      return decision;
+    } catch (err) {
+      if (err instanceof StorageError) throw err;
+      throw new StorageError(`Failed to create decision: ${String(err)}`, err);
+    }
+  }
+
+  async getDecision(id: string): Promise<Decision | null> {
+    try {
+      return this.getDecisionSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to get decision: ${String(err)}`, err);
+    }
+  }
+
+  private getDecisionSync(id: string): Decision | null {
+    const row = this.db
+      .prepare('SELECT * FROM decisions WHERE id = ?')
+      .get(id) as RawDecisionRow | undefined;
+    return row ? rowToDecision(row) : null;
+  }
+
+  async getDecisions(repository: string, category?: string): Promise<Decision[]> {
+    try {
+      if (category) {
+        const rows = this.db
+          .prepare(
+            `SELECT * FROM decisions WHERE repository = ? AND category = ? AND status = 'active' ORDER BY made_at DESC`
+          )
+          .all(repository, category) as RawDecisionRow[];
+        return rows.map(rowToDecision);
+      }
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM decisions WHERE repository = ? AND status = 'active' ORDER BY made_at DESC`
+        )
+        .all(repository) as RawDecisionRow[];
+      return rows.map(rowToDecision);
+    } catch (err) {
+      throw new StorageError(`Failed to get decisions: ${String(err)}`, err);
+    }
+  }
+
+  async updateDecision(id: string, updates: UpdateDecisionRecord): Promise<Decision | null> {
+    const existing = this.getDecisionSync(id);
+    if (!existing) return null;
+
+    const setClauses: string[] = ['updated_at = ?'];
+    const params: unknown[] = [updates.updated_at ?? new Date().toISOString()];
+
+    if (updates.status !== undefined) {
+      setClauses.push('status = ?');
+      params.push(updates.status);
+    }
+    if (updates.superseded_by !== undefined) {
+      setClauses.push('superseded_by = ?');
+      params.push(updates.superseded_by);
+    }
+
+    params.push(id);
+    try {
+      this.db
+        .prepare(`UPDATE decisions SET ${setClauses.join(', ')} WHERE id = ?`)
+        .run(...params);
+      return this.getDecisionSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to update decision: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Findings (AMU-AC-9, AMU-AC-10, AMU-AC-11)
+  // ---------------------------------------------------------------------------
+
+  async createFinding(record: CreateFindingRecord): Promise<Finding> {
+    const now = new Date().toISOString();
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO findings (id, repository, file_path, severity, issue, suggestion, status, found_by, found_at, resolved_at, resolved_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, NULL, NULL, ?, ?)`
+        )
+        .run(
+          record.id,
+          record.repository,
+          record.file_path,
+          record.severity,
+          record.issue,
+          record.suggestion,
+          record.found_by ?? null,
+          now,
+          now,
+          now
+        );
+      const finding = this.getFindingSync(record.id);
+      if (!finding) throw new StorageError('Finding not found immediately after insert');
+      return finding;
+    } catch (err) {
+      if (err instanceof StorageError) throw err;
+      throw new StorageError(`Failed to create finding: ${String(err)}`, err);
+    }
+  }
+
+  async getFinding(id: string): Promise<Finding | null> {
+    try {
+      return this.getFindingSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to get finding: ${String(err)}`, err);
+    }
+  }
+
+  private getFindingSync(id: string): Finding | null {
+    const row = this.db
+      .prepare('SELECT * FROM findings WHERE id = ?')
+      .get(id) as RawFindingRow | undefined;
+    return row ? rowToFinding(row) : null;
+  }
+
+  async getOpenFindings(repository: string, severity?: string): Promise<Finding[]> {
+    try {
+      // Severity ordering: critical=0, warning=1, suggestion=2 (critical first per AMU-AC-11)
+      const severityOrder = `CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 WHEN 'suggestion' THEN 2 ELSE 3 END`;
+      if (severity) {
+        const rows = this.db
+          .prepare(
+            `SELECT * FROM findings WHERE repository = ? AND severity = ? AND status = 'open'
+             ORDER BY ${severityOrder}, found_at DESC`
+          )
+          .all(repository, severity) as RawFindingRow[];
+        return rows.map(rowToFinding);
+      }
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM findings WHERE repository = ? AND status = 'open'
+           ORDER BY ${severityOrder}, found_at DESC`
+        )
+        .all(repository) as RawFindingRow[];
+      return rows.map(rowToFinding);
+    } catch (err) {
+      throw new StorageError(`Failed to get open findings: ${String(err)}`, err);
+    }
+  }
+
+  async updateFinding(id: string, updates: UpdateFindingRecord): Promise<Finding | null> {
+    const existing = this.getFindingSync(id);
+    if (!existing) return null;
+
+    const setClauses: string[] = ['updated_at = ?'];
+    const params: unknown[] = [updates.updated_at ?? new Date().toISOString()];
+
+    if (updates.status !== undefined) {
+      setClauses.push('status = ?');
+      params.push(updates.status);
+    }
+    if (updates.resolved_at !== undefined) {
+      setClauses.push('resolved_at = ?');
+      params.push(updates.resolved_at);
+    }
+    if (updates.resolved_by !== undefined) {
+      setClauses.push('resolved_by = ?');
+      params.push(updates.resolved_by);
+    }
+
+    params.push(id);
+    try {
+      this.db
+        .prepare(`UPDATE findings SET ${setClauses.join(', ')} WHERE id = ?`)
+        .run(...params);
+      return this.getFindingSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to update finding: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gotchas (AMU-AC-12, AMU-AC-13, AMU-AC-30)
+  // ---------------------------------------------------------------------------
+
+  async createGotcha(record: CreateGotchaRecord): Promise<Gotcha> {
+    const now = new Date().toISOString();
+    const tagsJson = JSON.stringify(record.tags);
+    const embeddingJson = record.embedding ? JSON.stringify(record.embedding) : null;
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO gotchas (id, repository, description, tags, technology, embedding, times_encountered, first_seen, last_seen, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+        )
+        .run(
+          record.id,
+          record.repository,
+          record.description,
+          tagsJson,
+          record.technology ?? null,
+          embeddingJson,
+          now,
+          now,
+          now,
+          now
+        );
+      const gotcha = this.getGotchaSync(record.id);
+      if (!gotcha) throw new StorageError('Gotcha not found immediately after insert');
+      return gotcha;
+    } catch (err) {
+      if (err instanceof StorageError) throw err;
+      throw new StorageError(`Failed to create gotcha: ${String(err)}`, err);
+    }
+  }
+
+  async getGotcha(id: string): Promise<Gotcha | null> {
+    try {
+      return this.getGotchaSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to get gotcha: ${String(err)}`, err);
+    }
+  }
+
+  private getGotchaSync(id: string): Gotcha | null {
+    const row = this.db
+      .prepare('SELECT * FROM gotchas WHERE id = ?')
+      .get(id) as RawGotchaRow | undefined;
+    return row ? rowToGotcha(row) : null;
+  }
+
+  async getGotchas(repository: string, technology?: string): Promise<Gotcha[]> {
+    try {
+      if (technology) {
+        const rows = this.db
+          .prepare(
+            `SELECT * FROM gotchas WHERE repository = ? AND technology = ? ORDER BY times_encountered DESC`
+          )
+          .all(repository, technology) as RawGotchaRow[];
+        return rows.map(rowToGotcha);
+      }
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM gotchas WHERE repository = ? ORDER BY times_encountered DESC`
+        )
+        .all(repository) as RawGotchaRow[];
+      return rows.map(rowToGotcha);
+    } catch (err) {
+      throw new StorageError(`Failed to get gotchas: ${String(err)}`, err);
+    }
+  }
+
+  async updateGotcha(id: string, updates: UpdateGotchaRecord): Promise<Gotcha | null> {
+    const existing = this.getGotchaSync(id);
+    if (!existing) return null;
+
+    const setClauses: string[] = ['updated_at = ?'];
+    const params: unknown[] = [updates.updated_at ?? new Date().toISOString()];
+
+    if (updates.times_encountered !== undefined) {
+      setClauses.push('times_encountered = ?');
+      params.push(updates.times_encountered);
+    }
+    if (updates.last_seen !== undefined) {
+      setClauses.push('last_seen = ?');
+      params.push(updates.last_seen);
+    }
+    if (updates.embedding !== undefined) {
+      setClauses.push('embedding = ?');
+      params.push(updates.embedding ? JSON.stringify(updates.embedding) : null);
+    }
+
+    params.push(id);
+    try {
+      this.db
+        .prepare(`UPDATE gotchas SET ${setClauses.join(', ')} WHERE id = ?`)
+        .run(...params);
+      return this.getGotchaSync(id);
+    } catch (err) {
+      throw new StorageError(`Failed to update gotcha: ${String(err)}`, err);
+    }
+  }
+
+  async findSimilarGotcha(repository: string, embedding: number[], minSimilarity: number): Promise<Gotcha | null> {
+    try {
+      // Full scan of gotcha embeddings in same repository (AMU-AC-30)
+      const rows = this.db
+        .prepare(`SELECT * FROM gotchas WHERE repository = ? AND embedding IS NOT NULL`)
+        .all(repository) as RawGotchaRow[];
+
+      let bestMatch: Gotcha | null = null;
+      let bestSimilarity = -1;
+
+      for (const row of rows) {
+        const gotcha = rowToGotcha(row);
+        if (!gotcha.embedding) continue;
+        const similarity = cosineSimilarity(embedding, gotcha.embedding);
+        if (similarity >= minSimilarity && similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+          bestMatch = gotcha;
+        }
+      }
+
+      return bestMatch;
+    } catch (err) {
+      throw new StorageError(`Failed to find similar gotcha: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Run Summaries (AMU-AC-14, AMU-AC-15)
+  // ---------------------------------------------------------------------------
+
+  async createRunSummary(record: CreateRunSummaryRecord): Promise<RunSummary> {
+    const now = new Date().toISOString();
+    const filesJson = JSON.stringify(record.files_changed);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO run_summaries (id, repository, summary, files_changed, started_at, duration_seconds, outcome, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          record.id,
+          record.repository,
+          record.summary,
+          filesJson,
+          now,
+          record.duration_seconds ?? null,
+          record.outcome,
+          now
+        );
+      const runSummary = this.getRunSummarySync(record.id);
+      if (!runSummary) throw new StorageError('Run summary not found immediately after insert');
+      return runSummary;
+    } catch (err) {
+      if (err instanceof StorageError) throw err;
+      throw new StorageError(`Failed to create run summary: ${String(err)}`, err);
+    }
+  }
+
+  private getRunSummarySync(id: string): RunSummary | null {
+    const row = this.db
+      .prepare('SELECT * FROM run_summaries WHERE id = ?')
+      .get(id) as RawRunSummaryRow | undefined;
+    return row ? rowToRunSummary(row) : null;
+  }
+
+  async getRunHistory(repository: string, limit: number): Promise<RunSummary[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM run_summaries WHERE repository = ? ORDER BY started_at DESC LIMIT ?`
+        )
+        .all(repository, limit) as RawRunSummaryRow[];
+      return rows.map(rowToRunSummary);
+    } catch (err) {
+      throw new StorageError(`Failed to get run history: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Relevant Context (AMU-AC-16, AMU-AC-18)
+  // ---------------------------------------------------------------------------
+
+  async getRelevantDecisions(repository: string, keywords: string[]): Promise<Decision[]> {
+    try {
+      // Keyword overlap on choice and rationale fields (AMU-AC-18 fallback)
+      if (keywords.length === 0) {
+        const rows = this.db
+          .prepare(
+            `SELECT * FROM decisions WHERE repository = ? AND status = 'active' ORDER BY made_at DESC LIMIT 3`
+          )
+          .all(repository) as RawDecisionRow[];
+        return rows.map(rowToDecision);
+      }
+
+      // Build keyword LIKE conditions — keyword overlap search
+      const conditions = keywords
+        .map(() => `(LOWER(choice) LIKE ? OR LOWER(rationale) LIKE ?)`)
+        .join(' OR ');
+      const params: unknown[] = [];
+      for (const kw of keywords) {
+        const pattern = `%${kw.toLowerCase()}%`;
+        params.push(pattern, pattern);
+      }
+      params.push(repository);
+
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM decisions WHERE (${conditions}) AND repository = ? AND status = 'active' ORDER BY made_at DESC LIMIT 3`
+        )
+        .all(...params) as RawDecisionRow[];
+      return rows.map(rowToDecision);
+    } catch (err) {
+      throw new StorageError(`Failed to get relevant decisions: ${String(err)}`, err);
+    }
+  }
+
+  async getRelevantFindings(repository: string, keywords: string[]): Promise<Finding[]> {
+    try {
+      const severityOrder = `CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 WHEN 'suggestion' THEN 2 ELSE 3 END`;
+
+      if (keywords.length === 0) {
+        const rows = this.db
+          .prepare(
+            `SELECT * FROM findings WHERE repository = ? AND status = 'open'
+             ORDER BY ${severityOrder}, found_at DESC LIMIT 3`
+          )
+          .all(repository) as RawFindingRow[];
+        return rows.map(rowToFinding);
+      }
+
+      // Build keyword LIKE conditions — keyword overlap on issue and suggestion
+      const conditions = keywords
+        .map(() => `(LOWER(issue) LIKE ? OR LOWER(suggestion) LIKE ?)`)
+        .join(' OR ');
+      const params: unknown[] = [];
+      for (const kw of keywords) {
+        const pattern = `%${kw.toLowerCase()}%`;
+        params.push(pattern, pattern);
+      }
+      params.push(repository);
+
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM findings WHERE (${conditions}) AND repository = ? AND status = 'open'
+           ORDER BY ${severityOrder}, found_at DESC LIMIT 3`
+        )
+        .all(...params) as RawFindingRow[];
+      return rows.map(rowToFinding);
+    } catch (err) {
+      throw new StorageError(`Failed to get relevant findings: ${String(err)}`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,6 +2046,132 @@ function rowToConflict(row: RawConflictRow): ConflictRecord {
     conflict_type: row.conflict_type,
     resolved: row.resolved === 1,
     resolved_by: row.resolved_by,
+    created_at: row.created_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AMU raw row interfaces (AMU-AC-1 through AMU-AC-4)
+// ---------------------------------------------------------------------------
+
+interface RawDecisionRow {
+  id: string;
+  repository: string;
+  category: string;
+  choice: string;
+  rationale: string;
+  made_by: string | null;
+  made_at: string;
+  status: string;
+  superseded_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawFindingRow {
+  id: string;
+  repository: string;
+  file_path: string;
+  severity: string;
+  issue: string;
+  suggestion: string;
+  status: string;
+  found_by: string | null;
+  found_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawGotchaRow {
+  id: string;
+  repository: string;
+  description: string;
+  tags: string;
+  technology: string | null;
+  embedding: string | null;
+  times_encountered: number;
+  first_seen: string;
+  last_seen: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawRunSummaryRow {
+  id: string;
+  repository: string;
+  summary: string;
+  files_changed: string;
+  started_at: string;
+  duration_seconds: number | null;
+  outcome: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// AMU row mapping helpers
+// ---------------------------------------------------------------------------
+
+function rowToDecision(row: RawDecisionRow): Decision {
+  return {
+    id: row.id,
+    repository: row.repository,
+    category: row.category,
+    choice: row.choice,
+    rationale: row.rationale,
+    made_by: row.made_by,
+    made_at: row.made_at,
+    status: row.status as Decision['status'],
+    superseded_by: row.superseded_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function rowToFinding(row: RawFindingRow): Finding {
+  return {
+    id: row.id,
+    repository: row.repository,
+    file_path: row.file_path,
+    severity: row.severity as Finding['severity'],
+    issue: row.issue,
+    suggestion: row.suggestion,
+    status: row.status as Finding['status'],
+    found_by: row.found_by,
+    found_at: row.found_at,
+    resolved_at: row.resolved_at,
+    resolved_by: row.resolved_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function rowToGotcha(row: RawGotchaRow): Gotcha {
+  return {
+    id: row.id,
+    repository: row.repository,
+    description: row.description,
+    tags: JSON.parse(row.tags) as string[],
+    technology: row.technology,
+    embedding: row.embedding ? (JSON.parse(row.embedding) as number[]) : null,
+    times_encountered: row.times_encountered,
+    first_seen: row.first_seen,
+    last_seen: row.last_seen,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function rowToRunSummary(row: RawRunSummaryRow): RunSummary {
+  return {
+    id: row.id,
+    repository: row.repository,
+    summary: row.summary,
+    files_changed: JSON.parse(row.files_changed) as string[],
+    started_at: row.started_at,
+    duration_seconds: row.duration_seconds,
+    outcome: row.outcome as RunSummary['outcome'],
     created_at: row.created_at,
   };
 }

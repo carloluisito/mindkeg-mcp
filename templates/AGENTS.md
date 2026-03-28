@@ -1,6 +1,6 @@
 # Mind Keg — Agent Instructions
 
-You have access to **Mind Keg**, a persistent memory system. It stores atomic learnings — debugging insights, architectural decisions, codebase conventions, and gotchas — so you never lose context between sessions.
+You have access to **Mind Keg**, a persistent memory system. It stores structured knowledge — architectural decisions, code review findings, gotchas, and atomic learnings — so you never lose context between sessions.
 
 **You MUST follow these instructions in every session.**
 
@@ -8,7 +8,24 @@ You have access to **Mind Keg**, a persistent memory system. It stores atomic le
 
 1. Determine the current repository path and workspace path (parent folder) from the working directory.
 
-2. Call `get_context` to prime yourself with all relevant learnings in one call:
+2. Call `get_relevant_context` to prime yourself with task-scoped knowledge in one call:
+
+   ```
+   get_relevant_context({
+     repository: "<current repo path>",
+     task_description: "<what you are about to do — 1-3 sentences>",
+     budget: "standard"
+   })
+   ```
+
+   This returns the most relevant decisions, open findings, gotchas, learnings, and recent run history — all scored by relevance to your task. Use this instead of (or in addition to) `get_context` for structured agent knowledge.
+
+   **Budget options:**
+   - `"compact"`: ~2000 chars (quick check, minimal context)
+   - `"standard"`: ~4000 chars (default, good balance)
+   - `"full"`: ~8000 chars (deep context, larger tasks)
+
+3. Optionally call `get_context` for the full learning dump with staleness review and near-duplicate detection:
 
    ```
    get_context({ repository: "<current repo path>" })
@@ -16,18 +33,13 @@ You have access to **Mind Keg**, a persistent memory system. It stores atomic le
 
    This returns learnings partitioned into `repo_learnings`, `workspace_learnings`, and `global_learnings`, ranked by actionability (gotchas first). It also surfaces `stale_review` items (learnings that may be outdated) and `near_duplicates` (redundant pairs for cleanup).
 
-   **Optional parameters:**
-   - `path_hint`: Subdirectory you're working in (e.g., `"packages/api"`) — boosts topically relevant learnings.
-   - `query`: Topic focus (e.g., `"authentication"`) — applies semantic ranking boost.
-   - `budget`: `"compact"`, `"standard"` (default), or `"full"` — controls how many learnings fit in the response.
-
-3. If `get_context` returns a `stale_review` array with items, examine them. For each:
+4. If `get_context` returns a `stale_review` array with items, examine them. For each:
    - If the learning is confirmed outdated: use `deprecate_learning` and store a corrected version.
    - If you're unsure: leave it flagged (do not clear the flag).
 
-4. If `get_context` returns `near_duplicates`, note the pairs. Offer to consolidate them at the end of the session.
+5. If `get_context` returns `near_duplicates`, note the pairs. Offer to consolidate them at the end of the session.
 
-5. For topic-specific work, use `search_learnings` to find learnings you know to look for. **You MUST search all three scopes explicitly** if you need targeted results:
+6. For topic-specific work, use `search_learnings` to find learnings you know to look for. **You MUST search all three scopes explicitly** if you need targeted results:
 
    ```
    // Repo scope
@@ -46,8 +58,19 @@ You have access to **Mind Keg**, a persistent memory system. It stores atomic le
 
 ## During the Session
 
+Use the appropriate tool for each type of knowledge you discover:
+
+| What you discover | Tool to use |
+|---|---|
+| An architectural choice with clear WHY (tech selection, design pattern, API design) | `store_decision` |
+| A code review issue that needs tracking across sessions | `store_finding` |
+| A non-obvious behavior or footgun that keeps tripping people up | `store_gotcha` |
+| A short factual insight (debugging tip, convention, quick gotcha) | `store_learning` |
+
 - If you discover a **contradiction** with a stored learning, use `deprecate_learning` on the old one and store the corrected version with `store_learning`.
 - If a learning seems **outdated but you're not sure**, use `flag_stale` to mark it for review instead of deleting it.
+- When a decision is **replaced by a newer one**: call `store_decision` for the new decision, then call `supersede_decision({ decision_id: oldId, new_decision_id: newId })`.
+- When a finding is **fixed**: call `resolve_finding({ finding_id: "<uuid>", resolved_by: "<your-agent-name>" })`.
 
 ## On Session End (or After Significant Discoveries)
 
@@ -58,6 +81,17 @@ You have access to **Mind Keg**, a persistent memory system. It stores atomic le
 > - [learning 2]
 >
 > Should I save these to Mind Keg?"
+
+If you are an orchestrator or completed a significant work session, call `complete_run`:
+
+```json
+{
+  "repository": "/path/to/current/repo",
+  "summary": "Implemented OAuth 2.0 authentication. Added JWT validation middleware and updated all protected routes.",
+  "files_changed": ["src/auth/middleware.ts", "src/routes/users.ts"],
+  "outcome": "success"
+}
+```
 
 **CRITICAL — NEVER skip this step:**
 
@@ -311,3 +345,142 @@ Category is optional in `store_learning`. If omitted, the server infers it using
 | `gotchas` | Surprising behaviors, footguns, things that break unexpectedly |
 | `dependencies` | Library-specific behaviors, version constraints, breaking changes |
 | `decisions` | Why a specific approach was chosen over alternatives |
+
+---
+
+## New Structured Tools (Agent Memory Upgrade)
+
+These tools provide first-class entities for the most common knowledge types agents produce and consume.
+
+### store_decision
+
+Store an architectural decision with rationale. Max 1000 chars for `choice`, 2000 chars for `rationale`.
+
+```json
+{
+  "repository": "/path/to/repo",
+  "category": "database",
+  "choice": "Use SQLite with node:sqlite for local storage. No external database.",
+  "rationale": "Solo developer use case. No concurrent writes needed. node:sqlite is built-in to Node.js 22+ — zero external dependencies. SQLite file can be shared via git or backed up easily.",
+  "made_by": "claude-code"
+}
+```
+
+### get_decisions
+
+Get active decisions for a repository (optional category filter):
+
+```json
+{ "repository": "/path/to/repo", "category": "database" }
+```
+
+### supersede_decision
+
+Mark a decision as replaced. Call `store_decision` first to get the new ID:
+
+```json
+{ "decision_id": "old-uuid", "new_decision_id": "new-uuid" }
+```
+
+### store_finding
+
+Store a code review finding. Severity: `critical` (must fix), `warning` (should fix), `suggestion` (nice to fix). Max 1000 chars each for `issue` and `suggestion`.
+
+```json
+{
+  "repository": "/path/to/repo",
+  "file_path": "src/auth/middleware.ts",
+  "severity": "critical",
+  "issue": "JWT secret is hardcoded as 'secret123' on line 12. This will be exposed in version control.",
+  "suggestion": "Move to environment variable: process.env.JWT_SECRET. Add JWT_SECRET to .env.example.",
+  "found_by": "claude-code"
+}
+```
+
+### resolve_finding
+
+Mark a finding as resolved after it has been addressed:
+
+```json
+{ "finding_id": "uuid-of-finding", "resolved_by": "claude-code" }
+```
+
+### get_open_findings
+
+Get unresolved findings (critical first):
+
+```json
+{ "repository": "/path/to/repo", "severity": "critical" }
+```
+
+### store_gotcha
+
+Store a non-obvious behavior. Auto-deduplicates: if a similar gotcha exists (cosine similarity >= 0.85), increments its `times_encountered` counter instead of creating a duplicate.
+
+```json
+{
+  "repository": "/path/to/repo",
+  "description": "node:sqlite DatabaseSync is synchronous — do NOT use await on DB calls. It will silently return a Promise wrapping the result instead of the actual row.",
+  "tags": ["sqlite", "async", "node"],
+  "technology": "sqlite"
+}
+```
+
+Response includes `incremented: true` when an existing gotcha was updated instead of a new one being created.
+
+### get_gotchas
+
+Get gotchas ordered by frequency (most common first):
+
+```json
+{ "repository": "/path/to/repo", "technology": "sqlite" }
+```
+
+### complete_run
+
+Record a completed execution run at the end of an orchestration or work session:
+
+```json
+{
+  "repository": "/path/to/repo",
+  "summary": "Implemented JWT authentication. Added middleware, updated all protected routes, wrote tests.",
+  "files_changed": ["src/auth/middleware.ts", "src/routes/users.ts", "tests/auth.test.ts"],
+  "outcome": "success",
+  "duration_seconds": 180
+}
+```
+
+`outcome`: `"success"` (all done), `"partial"` (some done), `"failed"` (did not complete).
+
+### get_run_history
+
+Get recent run summaries:
+
+```json
+{ "repository": "/path/to/repo", "limit": 5 }
+```
+
+### get_relevant_context
+
+Get task-scoped context across ALL entity types in one call. Use at session start:
+
+```json
+{
+  "repository": "/path/to/repo",
+  "task_description": "Implement rate limiting middleware for the REST API using token bucket algorithm",
+  "budget": "standard"
+}
+```
+
+Response structure:
+
+```json
+{
+  "decisions": [...],      // max 3 most relevant active decisions
+  "open_findings": [...],  // max 3 most relevant open findings (critical first)
+  "gotchas": [...],        // max 3 most relevant gotchas (frequent first)
+  "recent_learnings": [...],// max 3 most relevant active learnings
+  "recent_runs": [...],    // max 2 most recent run summaries
+  "summary": { "total_items": 11, "repository": "..." }
+}
+```

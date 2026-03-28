@@ -21,3 +21,14 @@ export {
   createEmbeddingService,
 } from './embedding-service.js';
 export type { EmbeddingService } from './embedding-service.js';
+
+export { EntityService } from './entity-service.js';
+export type {
+  StoreDecisionInput,
+  StoreFindingInput,
+  StoreGotchaInput,
+  CompleteRunInputRaw,
+  StoreGotchaResult,
+  ContextBudget,
+  RelevantContextResult,
+} from './entity-service.js';

@@ -17,6 +17,7 @@ import { registerPurgeCommand } from './commands/purge.js';
 import { registerEncryptDbCommand } from './commands/encrypt-db.js';
 import { registerDecryptDbCommand } from './commands/decrypt-db.js';
 import { registerBackfillIntegrityCommand } from './commands/backfill-integrity.js';
+import { registerSetupCommand } from './commands/setup.js';
 
 program
   .name('mindkeg')
@@ -35,6 +36,7 @@ registerPurgeCommand(program);
 registerEncryptDbCommand(program);
 registerDecryptDbCommand(program);
 registerBackfillIntegrityCommand(program);
+registerSetupCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error('Fatal error:', err instanceof Error ? err.message : String(err));

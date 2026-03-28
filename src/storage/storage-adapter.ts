@@ -5,6 +5,10 @@
  */
 import type { Learning, LearningWithScore, RelationshipRecord, CreateRelationshipRecord, ConflictRecord, CreateConflictRecord } from '../models/learning.js';
 import type { Repository } from '../models/repository.js';
+import type { Decision, CreateDecisionRecord, UpdateDecisionRecord } from '../models/decision.js';
+import type { Finding, CreateFindingRecord, UpdateFindingRecord } from '../models/finding.js';
+import type { Gotcha, CreateGotchaRecord, UpdateGotchaRecord } from '../models/gotcha.js';
+import type { RunSummary, CreateRunSummaryRecord } from '../models/run-summary.js';
 
 /**
  * Filters for get_context queries. Traces to GC-AC-4.
@@ -406,12 +410,102 @@ export interface StorageAdapter {
   batchUpdateStaleness(
     updates: Array<{ id: string; staleness_score: number; stale_flag: boolean }>
   ): Promise<void>;
+
+  // --- Decisions (AMU-AC-6, AMU-AC-7, AMU-AC-8) ---
+
+  /** Create a new decision record. Returns the created decision. */
+  createDecision(record: CreateDecisionRecord): Promise<Decision>;
+
+  /** Get a decision by ID. Returns null if not found. */
+  getDecision(id: string): Promise<Decision | null>;
+
+  /**
+   * Get all active decisions for a repository, optionally filtered by category.
+   * Returns decisions ordered by made_at descending (AMU-AC-7).
+   */
+  getDecisions(repository: string, category?: string): Promise<Decision[]>;
+
+  /** Update an existing decision (e.g., set status, superseded_by). Returns updated decision or null. */
+  updateDecision(id: string, updates: UpdateDecisionRecord): Promise<Decision | null>;
+
+  // --- Findings (AMU-AC-9, AMU-AC-10, AMU-AC-11) ---
+
+  /** Create a new finding record. Returns the created finding. */
+  createFinding(record: CreateFindingRecord): Promise<Finding>;
+
+  /** Get a finding by ID. Returns null if not found. */
+  getFinding(id: string): Promise<Finding | null>;
+
+  /**
+   * Get all open findings for a repository, optionally filtered by severity.
+   * Returns findings ordered by severity (critical first) then found_at descending (AMU-AC-11).
+   */
+  getOpenFindings(repository: string, severity?: string): Promise<Finding[]>;
+
+  /** Update an existing finding (e.g., resolve it). Returns updated finding or null. */
+  updateFinding(id: string, updates: UpdateFindingRecord): Promise<Finding | null>;
+
+  // --- Gotchas (AMU-AC-12, AMU-AC-13, AMU-AC-30) ---
+
+  /** Create a new gotcha record. Returns the created gotcha. */
+  createGotcha(record: CreateGotchaRecord): Promise<Gotcha>;
+
+  /** Get a gotcha by ID. Returns null if not found. */
+  getGotcha(id: string): Promise<Gotcha | null>;
+
+  /**
+   * Get all gotchas for a repository, optionally filtered by technology.
+   * Returns gotchas ordered by times_encountered descending (AMU-AC-13).
+   */
+  getGotchas(repository: string, technology?: string): Promise<Gotcha[]>;
+
+  /** Update an existing gotcha (e.g., increment times_encountered, update last_seen). Returns updated gotcha or null. */
+  updateGotcha(id: string, updates: UpdateGotchaRecord): Promise<Gotcha | null>;
+
+  /**
+   * Find a similar gotcha in the same repository using cosine similarity on embeddings.
+   * Returns the most similar gotcha above minSimilarity threshold, or null if none found.
+   * Used for gotcha deduplication (AMU-AC-30).
+   */
+  findSimilarGotcha(repository: string, embedding: number[], minSimilarity: number): Promise<Gotcha | null>;
+
+  // --- Run Summaries (AMU-AC-14, AMU-AC-15) ---
+
+  /** Create a new run summary record. Returns the created run summary. */
+  createRunSummary(record: CreateRunSummaryRecord): Promise<RunSummary>;
+
+  /**
+   * Get run history for a repository.
+   * Returns run summaries ordered by started_at descending (AMU-AC-15).
+   */
+  getRunHistory(repository: string, limit: number): Promise<RunSummary[]>;
+
+  // --- Relevant Context (AMU-AC-16, AMU-AC-18) ---
+
+  /**
+   * Get decisions relevant to the given keywords.
+   * Searches choice and rationale fields for keyword overlap.
+   * Returns at most 3 active decisions ordered by relevance.
+   */
+  getRelevantDecisions(repository: string, keywords: string[]): Promise<Decision[]>;
+
+  /**
+   * Get findings relevant to the given keywords.
+   * Searches issue and suggestion fields for keyword overlap.
+   * Returns at most 3 open findings, critical severity first.
+   */
+  getRelevantFindings(repository: string, keywords: string[]): Promise<Finding[]>;
 }
 
 // Re-export relationship types for consumers that import from storage-adapter
 export type { RelationshipRecord, CreateRelationshipRecord };
 // Re-export conflict types for consumers that import from storage-adapter
 export type { ConflictRecord, CreateConflictRecord };
+// Re-export AMU entity types for consumers that import from storage-adapter
+export type { Decision, CreateDecisionRecord, UpdateDecisionRecord } from '../models/decision.js';
+export type { Finding, CreateFindingRecord, UpdateFindingRecord } from '../models/finding.js';
+export type { Gotcha, CreateGotchaRecord, UpdateGotchaRecord } from '../models/gotcha.js';
+export type { RunSummary, CreateRunSummaryRecord } from '../models/run-summary.js';
 
 /** Aggregate statistics about the learnings database. */
 export interface LearningStats {

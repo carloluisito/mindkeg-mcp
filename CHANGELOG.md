@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-28
+
+### Added
+- **Agent Memory Entities**: four new structured entity types — decisions, findings, gotchas, and run summaries — for richer cross-session agent memory beyond atomic learnings
+- **11 new MCP tools**: `store_decision`, `get_decisions`, `supersede_decision`, `store_finding`, `get_open_findings`, `resolve_finding`, `store_gotcha`, `get_gotchas`, `get_relevant_context`, `get_run_history`, `complete_run`
+- **Entity service**: `EntityService` encapsulates CRUD and query logic for all entity types with scope-aware filtering
+- **`mindkeg setup` CLI command**: interactive project setup wizard
+- Database migration 005: `decisions`, `findings`, `gotchas`, and `run_summaries` tables with full indexing
+- Zod schemas and TypeScript types for all entity models (`Decision`, `Finding`, `Gotcha`, `RunSummary`)
+- Comprehensive unit and integration tests for entity models, service, storage adapter, and migration
+
+### Changed
+- MCP tool count: 11 → 22
+- `AGENTS.md` template expanded with agent memory entity documentation and usage instructions
+
 ## [0.5.0] - 2026-03-23
 
 ### Added

@@ -163,6 +163,8 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 
 ## MCP Tools
 
+### Learnings
+
 | Tool                 | Description                                          |
 |----------------------|------------------------------------------------------|
 | `get_context`        | Prime an agent session with all relevant learnings — ranked, scoped, and budget-controlled |
@@ -176,6 +178,24 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 | `relate_learnings`   | Create typed relationships between learnings          |
 | `list_repositories`  | List all repositories with learning counts           |
 | `list_workspaces`    | List all workspaces with learning counts             |
+
+### Agent Memory Entities
+
+Structured entity types for capturing decisions, findings, gotchas, and run summaries — richer than atomic learnings, designed for cross-session agent memory.
+
+| Tool                   | Description                                          |
+|------------------------|------------------------------------------------------|
+| `store_decision`       | Record an architectural or design decision with rationale |
+| `get_decisions`        | Retrieve decisions for a repository, optionally filtered by status |
+| `supersede_decision`   | Mark a decision as superseded by a newer one         |
+| `store_finding`        | Record a bug, issue, or investigation finding         |
+| `get_open_findings`    | Retrieve unresolved findings for a repository         |
+| `resolve_finding`      | Mark a finding as resolved with a resolution summary  |
+| `store_gotcha`         | Record a non-obvious pitfall or gotcha                |
+| `get_gotchas`          | Retrieve gotchas for a repository                     |
+| `get_relevant_context` | Retrieve all entity types relevant to a repository    |
+| `get_run_history`      | Retrieve run summaries for a repository               |
+| `complete_run`         | Record the completion of an agent run with a summary  |
 
 ## CLI Commands
 
@@ -463,7 +483,7 @@ src/
   crypto/           AES-256-GCM field encryption
   monitoring/       Prometheus metrics + /health endpoint
   security/         Content sanitization, integrity hashing, rate limiter
-  tools/            One file per MCP tool (11 tools) + shared tool-utils
+  tools/            One file per MCP tool (22 tools) + shared tool-utils
   services/         LearningService + EmbeddingService + PurgeService + ConflictDetector + StalenessEngine
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types

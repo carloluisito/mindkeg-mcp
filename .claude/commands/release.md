@@ -79,8 +79,9 @@ If any check fails, tell the user what failed and do NOT proceed with the commit
 ## 9. Push to GitHub
 
 - Ask the user for confirmation before pushing.
-- Run `git push origin main --follow-tags` to push the commit and tag together.
-- If the tag was not pushed (check with `git ls-remote --tags origin vX.Y.Z`), push it explicitly with `git push origin vX.Y.Z`.
+- Push commits first: `git push origin main`
+- Then push the tag separately: `git push origin vX.Y.Z`
+- **Important**: Do NOT use `--follow-tags` — GitHub Actions may swallow the tag push event when commits and tags are pushed together, preventing the Release workflow from triggering.
 
 ## 10. Create GitHub release
 

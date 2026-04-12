@@ -5,12 +5,12 @@
  * Project: writes MCP config + AGENTS.md into the current project (legacy behavior).
  */
 import type { Command } from 'commander';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { generateBashHook, generatePowerShellHook, generateHookConfig } from '../../src/hooks/generate-hook.js';
+import { generateBashHook, generateHookConfig } from '../../src/hooks/generate-hook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -178,14 +178,34 @@ export function writeGlobalMcpConfig(homeDir: string, agent: Agent): { created: 
   return { created: true, path: configPath };
 }
 
-/** Write the SessionStart auto-retrieval hook for Claude Code (global only). */
-export function writeGlobalHook(homeDir: string, agent: Agent): { created: boolean; path: string } | null {
-  const config = AGENT_CONFIGS[agent];
-  if (!config.globalHookDir || !config.globalSettingsFile) return null;
+/** Detect Claude Code profile directories (e.g., ~/.claude-personal, ~/.claude-work). */
+export function detectClaudeProfiles(homeDir: string): string[] {
+  const profiles: string[] = [];
+  try {
+    const entries = readdirSync(homeDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith('.claude-') && entry.name !== '.claude-worktrees') {
+        const settingsPath = join(homeDir, entry.name, 'settings.json');
+        if (existsSync(settingsPath)) {
+          profiles.push(entry.name);
+        }
+      }
+    }
+  } catch {
+    // Can't read home dir — return empty
+  }
+  return profiles;
+}
 
-  const hookDir = join(homeDir, config.globalHookDir);
-  const isWindows = process.platform === 'win32';
-  const hookFileName = isWindows ? 'load-mindkeg.ps1' : 'load-mindkeg.sh';
+/**
+ * Write a hook script and merge its config into a settings.json file.
+ * Always generates bash scripts — Claude Code uses bash on all platforms.
+ */
+export function writeHookToDir(
+  hookDir: string,
+  settingsPath: string,
+): { created: boolean; path: string } {
+  const hookFileName = 'load-mindkeg.sh';
   const hookPath = join(hookDir, hookFileName);
 
   // Write hook script
@@ -193,11 +213,11 @@ export function writeGlobalHook(homeDir: string, agent: Agent): { created: boole
     mkdirSync(hookDir, { recursive: true });
   }
 
-  const scriptContent = isWindows ? generatePowerShellHook() : generateBashHook();
+  const scriptContent = generateBashHook();
   writeFileSync(hookPath, scriptContent, 'utf-8');
 
   // Make executable on Unix
-  if (!isWindows) {
+  if (process.platform !== 'win32') {
     try {
       execSync(`chmod +x "${hookPath}"`, { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch {
@@ -206,7 +226,9 @@ export function writeGlobalHook(homeDir: string, agent: Agent): { created: boole
   }
 
   // Merge hook config into settings.json
-  const settingsPath = join(homeDir, config.globalSettingsFile);
+  // Use bash prefix with forward slashes so it works on all platforms
+  const hookCommand = 'bash ' + hookPath.replace(/\\/g, '/');
+
   let settings: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     try {
@@ -217,7 +239,7 @@ export function writeGlobalHook(homeDir: string, agent: Agent): { created: boole
   }
 
   // Generate hook config and deep-merge into settings
-  const hookConfig = generateHookConfig(hookPath);
+  const hookConfig = generateHookConfig(hookCommand);
   const existingHooks = (settings['hooks'] ?? {}) as Record<string, unknown>;
   const newHooks = (hookConfig['hooks'] ?? {}) as Record<string, unknown>;
 
@@ -239,6 +261,17 @@ export function writeGlobalHook(homeDir: string, agent: Agent): { created: boole
   }
 
   return { created: !alreadyHasMindkeg, path: hookPath };
+}
+
+/** Write the SessionStart auto-retrieval hook for Claude Code (global only). */
+export function writeGlobalHook(homeDir: string, agent: Agent): { created: boolean; path: string } | null {
+  const config = AGENT_CONFIGS[agent];
+  if (!config.globalHookDir || !config.globalSettingsFile) return null;
+
+  const hookDir = join(homeDir, config.globalHookDir);
+  const settingsPath = join(homeDir, config.globalSettingsFile);
+
+  return writeHookToDir(hookDir, settingsPath);
 }
 
 /** Ensure ~/.mindkeg/ exists and brain.db can be created. */
@@ -378,6 +411,19 @@ function runGlobalInit(opts: { agent?: string; healthCheck: boolean }): void {
       console.log(`  ✓ Wrote ${hookResult.path}`);
     } else {
       console.log(`  - Hook already registered`);
+    }
+
+    // Also install hooks in detected profile directories
+    const profiles = detectClaudeProfiles(home);
+    for (const profile of profiles) {
+      const profileHookDir = join(home, profile, 'hooks');
+      const profileSettingsFile = join(home, profile, 'settings.json');
+      const profileResult = writeHookToDir(profileHookDir, profileSettingsFile);
+      if (profileResult.created) {
+        console.log(`  ✓ Wrote ${profileResult.path} (profile: ${profile})`);
+      } else {
+        console.log(`  - Hook already registered in ${profile}`);
+      }
     }
   }
 

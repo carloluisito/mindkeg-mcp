@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateBashHook, generatePowerShellHook, generateHookConfig } from '../../src/hooks/generate-hook.js';
+import { generateBashHook, generateHookConfig } from '../../src/hooks/generate-hook.js';
 
 describe('generateBashHook', () => {
   it('should produce a script starting with shebang', () => {
@@ -26,23 +26,22 @@ describe('generateBashHook', () => {
     const script = generateBashHook();
     expect(script).toContain('2>/dev/null');
   });
-});
 
-describe('generatePowerShellHook', () => {
-  it('should use try/catch for error handling', () => {
-    const script = generatePowerShellHook();
-    expect(script).toContain('try {');
-    expect(script).toContain('catch {');
+  it('should contain the improved output header', () => {
+    const script = generateBashHook();
+    expect(script).toContain('Mind Keg Persistent Memory (from ~/.mindkeg/brain.db):');
   });
 
-  it('should always exit 0', () => {
-    const script = generatePowerShellHook();
-    expect(script.trimEnd()).toMatch(/exit 0$/);
+  it('should contain the improved footer message', () => {
+    const script = generateBashHook();
+    expect(script).toContain('These learnings were loaded from Mind Keg.');
   });
 
-  it('should detect repo via git', () => {
-    const script = generatePowerShellHook();
-    expect(script).toContain('git rev-parse --show-toplevel');
+  it('should capture output into a variable before echoing', () => {
+    const script = generateBashHook();
+    expect(script).toContain('OUTPUT=$(');
+    expect(script).toContain('if [ -n "$OUTPUT" ]');
+    expect(script).toContain('echo "$OUTPUT"');
   });
 });
 

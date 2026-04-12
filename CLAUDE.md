@@ -8,12 +8,12 @@ This file provides persistent context for AI agents (Claude Code, Cursor, Windsu
 Mind Keg MCP is a TypeScript/Node.js MCP server that stores, searches, and retrieves atomic developer learnings.
 It is designed to give AI agents persistent memory across sessions.
 
-- **Version**: 0.7.0
+- **Version**: 0.7.1
 - **Runtime**: Node.js >= 22 (uses built-in `node:sqlite`)
 - **Transport**: stdio (local) + HTTP+SSE (remote)
 - **Storage**: SQLite via `node:sqlite` (`DatabaseSync` — synchronous)
 - **Search**: Semantic (FastEmbed local ONNX or OpenAI embeddings) with FTS5 fallback when no embedding provider is configured
-- **Auth**: API key-based (SHA-256 hashed, never stored in plaintext)
+- **Auth**: stdio transport is auth-free (local use); HTTP transport requires API key (SHA-256 hashed, never stored in plaintext)
 - **License**: MIT
 
 ### Repository Layout
@@ -57,18 +57,17 @@ src/
     rate-limiter.ts     In-memory token bucket rate limiter (per-key, read/write buckets)
     sanitize.ts         Content sanitization (strip control chars, reject whitespace-only)
     index.ts            Security barrel export
-  tools/                One file per MCP tool (11 tools)
-    store-learning.ts
-    search-learnings.ts
-    update-learning.ts
-    deprecate-learning.ts
-    delete-learning.ts
-    flag-stale.ts
-    list-repositories.ts
-    list-workspaces.ts
-    get-context.ts
-    merge-learnings.ts  MCP tool: merge_learnings
-    relate-learnings.ts MCP tool: relate_learnings
+  hooks/
+    generate-hook.ts    Hook script generation for SessionStart auto-retrieval
+  tools/                MCP tool handlers
+    consolidated/       8 consolidated tools (primary API)
+      get-context.ts    Unified retrieval (session primer, entity context, search)
+      store.ts          Unified storage (learning, decision, finding, gotcha)
+      update.ts         Unified lifecycle (update, deprecate, flag_stale, delete, merge)
+      resolve.ts        Close out decisions or findings
+      query.ts          List knowledge by type
+      list-scopes.ts    List repositories and workspaces
+    [19 alias files]    Backwards-compatible aliases delegating to consolidated tools
     tool-utils.ts       Shared tool utilities (getActorFromApiKey, recordToolMetrics)
   services/
     learning-service.ts Business logic for CRUD + search + getContext
@@ -170,7 +169,7 @@ tests/
 - Internal imports third with `.js` extension (required for ESM: `./tools/store-learning.js`)
 
 ### Module Organization
-- One MCP tool per file in `src/tools/`
+- MCP tools organized under `src/tools/`: 8 consolidated tools in `consolidated/` subdirectory (primary API), 19 legacy tool files at the top level (backwards-compatible aliases)
 - Each tool file exports a `register*` function that takes `(server, learningService, storage, getApiKey)`
 - Services hold business logic; tools are thin wrappers that parse input, call service, format response
 - Storage adapter is interface-based for backend swappability
@@ -349,7 +348,7 @@ Matrix: Ubuntu + Windows, Node.js 22.
 | list_scopes | List repositories and workspaces with counts (replaces list_repositories, list_workspaces) |
 | relate_learnings | Create typed relationships between learnings |
 
-**21 backwards-compatible aliases:** All old tool names (store_learning, search_learnings, etc.) are registered as aliases that delegate to the same service methods. Aliases will be removed in the next major version.
+**19 backwards-compatible aliases:** All old tool names (store_learning, search_learnings, etc.) are registered as aliases that delegate to the same service methods. Aliases will be removed in the next major version.
 
 ### Data Model
 
@@ -420,7 +419,7 @@ Matrix: Ubuntu + Windows, Node.js 22.
 | MINDKEG_HOST | 127.0.0.1 | HTTP server bind address |
 | MINDKEG_PORT | 52100 | HTTP server port |
 | MINDKEG_LOG_LEVEL | info | debug / info / warn / error |
-| MINDKEG_API_KEY | (none) | API key for stdio transport |
+| MINDKEG_API_KEY | (none) | API key for HTTP transport (stdio is auth-free) |
 | MINDKEG_ENCRYPTION_KEY | (none) | Base64-encoded 256-bit key for AES-256-GCM content/embedding encryption |
 | MINDKEG_AUDIT_LOG | ~/.mindkeg/audit.jsonl | Audit log destination: file path, `"stderr"`, or `"none"` |
 | MINDKEG_DEFAULT_TTL_DAYS | (none) | Global default TTL in days; null = no automatic expiration |
@@ -450,7 +449,7 @@ All CRUD operations work identically regardless of provider. Only search quality
 - **ESM imports need `.js` extension**: Internal imports must use `.js` extension (e.g., `./tools/store-learning.js`) even though source files are `.ts`. This is required for ESM resolution.
 - **Scope mutual exclusivity**: `repository` and `workspace` are mutually exclusive on learnings. Setting both is rejected by Zod validation. Check the refine rule in `CreateLearningInputSchema`.
 - **CUDA skip in CI**: Set `ONNX_RUNTIME_NODE_INSTALL_CUDA=skip` during `npm ci` to prevent transient 502 failures when downloading CUDA binaries.
-- **CLI version hardcoded**: The CLI displays version `0.1.0` in `cli/index.ts` line 19, but `package.json` is at `0.2.0`. These are out of sync.
+- **Hardcoded version strings**: cli/index.ts, src/server.ts, and package.json each have independent version strings. Always update all three when releasing. Currently: cli/index.ts has '0.7.1', server.ts has '0.7.1', package.json has '0.7.1'.
 - **Auto-categorization requires an embedding provider**: When `MINDKEG_EMBEDDING_PROVIDER=none`, omitting `category` in `store_learning` throws a `ValidationError`. Auto-categorization depends on vector similarity — it cannot run without embeddings.
 - **Conflict detection produces false positives**: The keyword-heuristic approach in `conflict-detector.ts` is intentionally simple for v1. Expect false positives when negation/assertion words appear in different semantic contexts. Review detected conflicts before acting on them.
 - **Staleness recomputation runs on the purge interval**: `recomputeAllStalenessScores()` is scheduled alongside TTL purge (default every 24h). Staleness scores are not updated in real time — they reflect the state at the last recomputation cycle.

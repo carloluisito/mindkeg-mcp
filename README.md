@@ -86,10 +86,7 @@ Mind Keg works with any MCP-compatible AI coding agent. Choose your setup:
   "mcpServers": {
     "mindkeg": {
       "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
+      "args": ["serve", "--stdio"]
     }
   }
 }
@@ -102,10 +99,7 @@ Mind Keg works with any MCP-compatible AI coding agent. Choose your setup:
   "mcpServers": {
     "mindkeg": {
       "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
+      "args": ["serve", "--stdio"]
     }
   }
 }
@@ -118,10 +112,7 @@ Mind Keg works with any MCP-compatible AI coding agent. Choose your setup:
   "mcpServers": {
     "mindkeg": {
       "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
+      "args": ["serve", "--stdio"]
     }
   }
 }
@@ -253,7 +244,7 @@ mindkeg backfill-integrity  # Compute SHA-256 hashes for legacy learnings
 | `MINDKEG_HOST`                | `127.0.0.1`                  | HTTP server bind address            |
 | `MINDKEG_PORT`                | `52100`                      | HTTP server port                    |
 | `MINDKEG_LOG_LEVEL`           | `info`                       | `debug`, `info`, `warn`, `error`    |
-| `MINDKEG_API_KEY`             | (none)                       | API key for stdio transport         |
+| `MINDKEG_API_KEY`             | (none)                       | API key for HTTP transport (stdio is auth-free) |
 
 ### Embedding providers
 
@@ -482,7 +473,7 @@ src/
   crypto/           AES-256-GCM field encryption
   monitoring/       Prometheus metrics + /health endpoint
   security/         Content sanitization, integrity hashing, rate limiter
-  tools/            One file per MCP tool (22 tools) + shared tool-utils
+  tools/            MCP tool handlers (8 consolidated + 19 backwards-compatible aliases)
   services/         LearningService + EmbeddingService + PurgeService + ConflictDetector + StalenessEngine
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types

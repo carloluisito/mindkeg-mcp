@@ -10,6 +10,9 @@ import {
   detectAgents,
   writeMcpConfig,
   writeAgentInstructions,
+  writeGlobalMcpConfig,
+  writeGlobalHook,
+  ensureDatabase,
 } from '../../cli/commands/init.js';
 
 /** Create a fresh temp directory for each test. */
@@ -164,10 +167,172 @@ describe('writeMcpConfig', () => {
     expect(config.mcpServers.mindkeg).toBeDefined();
   });
 
-  it('includes MINDKEG_EMBEDDING_PROVIDER in env config', () => {
+  it('does not include env block in MCP config (auth-free stdio)', () => {
     writeMcpConfig(dir, 'claude-code');
     const config = JSON.parse(readFileSync(join(dir, '.claude', 'mcp.json'), 'utf-8'));
-    expect(config.mcpServers.mindkeg.env.MINDKEG_EMBEDDING_PROVIDER).toBe('fastembed');
+    expect(config.mcpServers.mindkeg.env).toBeUndefined();
+  });
+});
+
+describe('writeGlobalMcpConfig', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('writes to global config path for claude-code', () => {
+    const result = writeGlobalMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(join(dir, '.claude.json'));
+
+    const config = JSON.parse(readFileSync(result.path, 'utf-8'));
+    expect(config.mcpServers.mindkeg).toBeDefined();
+    expect(config.mcpServers.mindkeg.command).toBe('npx');
+    expect(config.mcpServers.mindkeg.args).toContain('mindkeg-mcp');
+  });
+
+  it('writes to global config path for cursor', () => {
+    const result = writeGlobalMcpConfig(dir, 'cursor');
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(join(dir, '.cursor', 'mcp.json'));
+  });
+
+  it('writes to global config path for windsurf', () => {
+    const result = writeGlobalMcpConfig(dir, 'windsurf');
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(join(dir, '.windsurf', 'mcp.json'));
+  });
+
+  it('does not include env block (no MINDKEG_API_KEY or MINDKEG_EMBEDDING_PROVIDER)', () => {
+    const result = writeGlobalMcpConfig(dir, 'claude-code');
+    const config = JSON.parse(readFileSync(result.path, 'utf-8'));
+    expect(config.mcpServers.mindkeg.env).toBeUndefined();
+  });
+
+  it('returns created=false if mindkeg already configured', () => {
+    writeGlobalMcpConfig(dir, 'claude-code');
+    const result = writeGlobalMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(false);
+  });
+
+  it('merges with existing global config', () => {
+    writeFileSync(
+      join(dir, '.claude.json'),
+      JSON.stringify({ mcpServers: { other: { command: 'test' } }, customKey: true }),
+      'utf-8',
+    );
+
+    const result = writeGlobalMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(true);
+
+    const config = JSON.parse(readFileSync(result.path, 'utf-8'));
+    expect(config.mcpServers.other.command).toBe('test');
+    expect(config.mcpServers.mindkeg).toBeDefined();
+    expect(config.customKey).toBe(true);
+  });
+
+  it('creates parent directories if needed', () => {
+    const result = writeGlobalMcpConfig(dir, 'cursor');
+    expect(result.created).toBe(true);
+    expect(existsSync(join(dir, '.cursor', 'mcp.json'))).toBe(true);
+  });
+});
+
+describe('writeGlobalHook', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns null for agents without hook support (cursor)', () => {
+    const result = writeGlobalHook(dir, 'cursor');
+    expect(result).toBeNull();
+  });
+
+  it('returns null for agents without hook support (windsurf)', () => {
+    const result = writeGlobalHook(dir, 'windsurf');
+    expect(result).toBeNull();
+  });
+
+  it('creates hook script for claude-code', () => {
+    const result = writeGlobalHook(dir, 'claude-code');
+    expect(result).not.toBeNull();
+    expect(result!.created).toBe(true);
+
+    const hookContent = readFileSync(result!.path, 'utf-8');
+    expect(hookContent).toContain('Mind Keg');
+    expect(hookContent).toContain('mindkeg');
+  });
+
+  it('creates settings.json with hook config for claude-code', () => {
+    writeGlobalHook(dir, 'claude-code');
+    const settingsPath = join(dir, '.claude', 'settings.json');
+    expect(existsSync(settingsPath)).toBe(true);
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(settings.hooks).toBeDefined();
+    expect(settings.hooks.SessionStart).toBeDefined();
+    expect(Array.isArray(settings.hooks.SessionStart)).toBe(true);
+    expect(settings.hooks.SessionStart.length).toBeGreaterThan(0);
+  });
+
+  it('does not duplicate hook on repeated calls', () => {
+    writeGlobalHook(dir, 'claude-code');
+    const result2 = writeGlobalHook(dir, 'claude-code');
+    expect(result2).not.toBeNull();
+    expect(result2!.created).toBe(false);
+
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    expect(settings.hooks.SessionStart).toHaveLength(1);
+  });
+
+  it('preserves existing settings.json keys', () => {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(dir, '.claude', 'settings.json'),
+      JSON.stringify({ existingKey: 'value' }),
+      'utf-8',
+    );
+
+    writeGlobalHook(dir, 'claude-code');
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    expect(settings.existingKey).toBe('value');
+    expect(settings.hooks.SessionStart).toBeDefined();
+  });
+});
+
+describe('ensureDatabase', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('creates .mindkeg directory if it does not exist', () => {
+    const result = ensureDatabase(dir);
+    expect(existsSync(join(dir, '.mindkeg'))).toBe(true);
+    expect(result.path).toBe(join(dir, '.mindkeg', 'brain.db'));
+    // ready depends on node:sqlite availability, but the directory is created either way
+  });
+
+  it('returns the correct database path', () => {
+    const result = ensureDatabase(dir);
+    expect(result.path).toContain('.mindkeg');
+    expect(result.path).toContain('brain.db');
   });
 });
 

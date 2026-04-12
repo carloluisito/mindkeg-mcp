@@ -1,13 +1,16 @@
 /**
  * CLI command: init
- * Initialize Mind Keg in the current project.
- * Detects agent tooling, writes MCP config, copies AGENTS.md, runs health check.
+ * Initialize Mind Keg globally (default) or per-project (--project).
+ * Global: writes MCP config to home directory, sets up auto-retrieval hook, ensures DB.
+ * Project: writes MCP config + AGENTS.md into the current project (legacy behavior).
  */
 import type { Command } from 'commander';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { generateBashHook, generatePowerShellHook, generateHookConfig } from '../../src/hooks/generate-hook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,9 +19,18 @@ export type Agent = 'claude-code' | 'cursor' | 'windsurf';
 
 interface AgentConfig {
   label: string;
-  configDir: string;
-  configFile: string;
+  /** Project-level config directory (used with --project) */
+  projectConfigDir: string;
+  /** Project-level MCP config file (used with --project) */
+  projectConfigFile: string;
+  /** Project-level instruction file (e.g. CLAUDE.md) */
   instructionFile: string | null;
+  /** Global MCP config file, relative to homedir() */
+  globalConfigFile: string;
+  /** Global hook directory, relative to homedir() (null = no hook support) */
+  globalHookDir: string | null;
+  /** Global settings file, relative to homedir() (null = no settings support) */
+  globalSettingsFile: string | null;
   /** Build the MCP server JSON entry */
   mcpEntry: () => Record<string, unknown>;
 }
@@ -26,41 +38,41 @@ interface AgentConfig {
 const AGENT_CONFIGS: Record<Agent, AgentConfig> = {
   'claude-code': {
     label: 'Claude Code',
-    configDir: '.claude',
-    configFile: '.claude/mcp.json',
+    projectConfigDir: '.claude',
+    projectConfigFile: '.claude/mcp.json',
     instructionFile: 'CLAUDE.md',
+    globalConfigFile: '.claude.json',
+    globalHookDir: '.claude/hooks',
+    globalSettingsFile: '.claude/settings.json',
     mcpEntry: () => ({
       command: 'npx',
       args: ['-y', 'mindkeg-mcp', 'serve', '--stdio'],
-      env: {
-        MINDKEG_EMBEDDING_PROVIDER: 'fastembed',
-      },
     }),
   },
   cursor: {
     label: 'Cursor',
-    configDir: '.cursor',
-    configFile: '.cursor/mcp.json',
+    projectConfigDir: '.cursor',
+    projectConfigFile: '.cursor/mcp.json',
     instructionFile: null,
+    globalConfigFile: '.cursor/mcp.json',
+    globalHookDir: null,
+    globalSettingsFile: null,
     mcpEntry: () => ({
       command: 'npx',
       args: ['-y', 'mindkeg-mcp', 'serve', '--stdio'],
-      env: {
-        MINDKEG_EMBEDDING_PROVIDER: 'fastembed',
-      },
     }),
   },
   windsurf: {
     label: 'Windsurf',
-    configDir: '.windsurf',
-    configFile: '.windsurf/mcp.json',
+    projectConfigDir: '.windsurf',
+    projectConfigFile: '.windsurf/mcp.json',
     instructionFile: null,
+    globalConfigFile: '.windsurf/mcp.json',
+    globalHookDir: null,
+    globalSettingsFile: null,
     mcpEntry: () => ({
       command: 'npx',
       args: ['-y', 'mindkeg-mcp', 'serve', '--stdio'],
-      env: {
-        MINDKEG_EMBEDDING_PROVIDER: 'fastembed',
-      },
     }),
   },
 };
@@ -69,7 +81,7 @@ const AGENT_CONFIGS: Record<Agent, AgentConfig> = {
 export function detectAgents(projectRoot: string): Agent[] {
   const detected: Agent[] = [];
   for (const [agent, config] of Object.entries(AGENT_CONFIGS)) {
-    if (existsSync(join(projectRoot, config.configDir))) {
+    if (existsSync(join(projectRoot, config.projectConfigDir))) {
       detected.push(agent as Agent);
     }
   }
@@ -91,9 +103,6 @@ function findProjectRoot(): string {
 
 /** Resolve the AGENTS.md template path (works in dev and after npm install). */
 function findTemplatesDir(): string {
-  // When running from dist/cli/commands/init.js, templates is at ../../templates
-  // When running from source via ts-node, it's at ../../../templates
-  // The package.json "files" includes "templates", so it ships with npm
   const candidates = [
     resolve(__dirname, '..', '..', 'templates'),      // from dist/cli/commands/
     resolve(__dirname, '..', '..', '..', 'templates'), // from cli/commands/ (dev)
@@ -106,18 +115,16 @@ function findTemplatesDir(): string {
   throw new Error('Could not locate templates/AGENTS.md. Is the package installed correctly?');
 }
 
-/** Write the MCP config for a given agent. Merges with existing config if present. */
+/** Write the MCP config for a given agent into the project directory. */
 export function writeMcpConfig(projectRoot: string, agent: Agent): { created: boolean; path: string } {
   const config = AGENT_CONFIGS[agent];
-  const configPath = join(projectRoot, config.configFile);
-  const configDir = join(projectRoot, config.configDir);
+  const configPath = join(projectRoot, config.projectConfigFile);
+  const configDir = join(projectRoot, config.projectConfigDir);
 
-  // Ensure directory exists
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
 
-  // Load existing config or start fresh
   let existing: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try {
@@ -138,6 +145,123 @@ export function writeMcpConfig(projectRoot: string, agent: Agent): { created: bo
 
   writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
   return { created: true, path: configPath };
+}
+
+/** Write the MCP config for a given agent into the global (home) directory. */
+export function writeGlobalMcpConfig(homeDir: string, agent: Agent): { created: boolean; path: string } {
+  const config = AGENT_CONFIGS[agent];
+  const configPath = join(homeDir, config.globalConfigFile);
+  const configDir = dirname(configPath);
+
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
+  }
+
+  let existing: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      // Malformed — overwrite
+    }
+  }
+
+  const mcpServers = (existing['mcpServers'] ?? {}) as Record<string, unknown>;
+  if (mcpServers['mindkeg']) {
+    return { created: false, path: configPath };
+  }
+
+  mcpServers['mindkeg'] = config.mcpEntry();
+  existing['mcpServers'] = mcpServers;
+
+  writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+  return { created: true, path: configPath };
+}
+
+/** Write the SessionStart auto-retrieval hook for Claude Code (global only). */
+export function writeGlobalHook(homeDir: string, agent: Agent): { created: boolean; path: string } | null {
+  const config = AGENT_CONFIGS[agent];
+  if (!config.globalHookDir || !config.globalSettingsFile) return null;
+
+  const hookDir = join(homeDir, config.globalHookDir);
+  const isWindows = process.platform === 'win32';
+  const hookFileName = isWindows ? 'load-mindkeg.ps1' : 'load-mindkeg.sh';
+  const hookPath = join(hookDir, hookFileName);
+
+  // Write hook script
+  if (!existsSync(hookDir)) {
+    mkdirSync(hookDir, { recursive: true });
+  }
+
+  const scriptContent = isWindows ? generatePowerShellHook() : generateBashHook();
+  writeFileSync(hookPath, scriptContent, 'utf-8');
+
+  // Make executable on Unix
+  if (!isWindows) {
+    try {
+      execSync(`chmod +x "${hookPath}"`, { stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch {
+      // chmod might fail on some systems, ignore
+    }
+  }
+
+  // Merge hook config into settings.json
+  const settingsPath = join(homeDir, config.globalSettingsFile);
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      // Malformed — overwrite
+    }
+  }
+
+  // Generate hook config and deep-merge into settings
+  const hookConfig = generateHookConfig(hookPath);
+  const existingHooks = (settings['hooks'] ?? {}) as Record<string, unknown>;
+  const newHooks = (hookConfig['hooks'] ?? {}) as Record<string, unknown>;
+
+  // Merge SessionStart array — append if not already present
+  const existingSessionStart = (existingHooks['SessionStart'] ?? []) as unknown[];
+  const newSessionStart = (newHooks['SessionStart'] ?? []) as unknown[];
+
+  // Check if mindkeg hook already registered
+  const alreadyHasMindkeg = existingSessionStart.some((entry: unknown) => {
+    const e = entry as Record<string, unknown>;
+    const hooks = (e['hooks'] ?? []) as Array<Record<string, unknown>>;
+    return hooks.some(h => typeof h['command'] === 'string' && (h['command'] as string).includes('mindkeg'));
+  });
+
+  if (!alreadyHasMindkeg) {
+    existingHooks['SessionStart'] = [...existingSessionStart, ...newSessionStart];
+    settings['hooks'] = existingHooks;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+  }
+
+  return { created: !alreadyHasMindkeg, path: hookPath };
+}
+
+/** Ensure ~/.mindkeg/ exists and brain.db can be created. */
+export function ensureDatabase(homeDir: string): { ready: boolean; path: string; error?: string } {
+  const dbDir = join(homeDir, '.mindkeg');
+  const dbPath = join(dbDir, 'brain.db');
+
+  try {
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true });
+    }
+
+    // Try to open/create the database using node:sqlite
+    const escapedPath = dbPath.replace(/\\/g, '\\\\');
+    execSync(`node --experimental-sqlite -e "const { DatabaseSync } = require('node:sqlite'); new DatabaseSync('${escapedPath}');"`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    return { ready: true, path: dbPath };
+  } catch (err) {
+    return { ready: false, path: dbPath, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Copy or append AGENTS.md instructions into the project. */
@@ -208,7 +332,7 @@ function runHealthCheck(): { db: boolean; embeddings: boolean; dbError?: string;
     result.db = true;
   }
 
-  // Embedding check: fastembed availability (just check the package resolves)
+  // Embedding check: fastembed availability
   try {
     execSync('node -e "require.resolve(\'fastembed\')"', {
       encoding: 'utf-8',
@@ -217,91 +341,153 @@ function runHealthCheck(): { db: boolean; embeddings: boolean; dbError?: string;
     });
     result.embeddings = true;
   } catch {
-    // fastembed may not be resolvable from here — that's fine, npx will handle it
     result.embeddings = true; // Trust that npx mindkeg-mcp will resolve it
   }
 
   return result;
 }
 
+/** Run the global init flow (default behavior). */
+function runGlobalInit(opts: { agent?: string; healthCheck: boolean }): void {
+  const home = homedir();
+  const agent: Agent = (opts.agent as Agent) || 'claude-code';
+
+  // Validate agent
+  const valid = Object.keys(AGENT_CONFIGS);
+  if (!valid.includes(agent)) {
+    console.error(`Unknown agent "${agent}". Valid options: ${valid.join(', ')}`);
+    process.exit(1);
+  }
+
+  console.log(`\nMind Keg — Global Setup for ${AGENT_CONFIGS[agent].label}\n`);
+
+  // 1. Write global MCP config
+  console.log('MCP Configuration:');
+  const mcpResult = writeGlobalMcpConfig(home, agent);
+  if (mcpResult.created) {
+    console.log(`  ✓ Wrote ${mcpResult.path}`);
+  } else {
+    console.log(`  - mindkeg already configured in ${mcpResult.path}`);
+  }
+
+  // 2. Write global hook (Claude Code only)
+  const hookResult = writeGlobalHook(home, agent);
+  if (hookResult) {
+    console.log('\nSessionStart Hook:');
+    if (hookResult.created) {
+      console.log(`  ✓ Wrote ${hookResult.path}`);
+    } else {
+      console.log(`  - Hook already registered`);
+    }
+  }
+
+  // 3. Ensure database
+  console.log('\nDatabase:');
+  const dbResult = ensureDatabase(home);
+  if (dbResult.ready) {
+    console.log(`  ✓ Ready at ${dbResult.path}`);
+  } else {
+    console.log(`  ✗ Failed: ${dbResult.error}`);
+  }
+
+  // 4. Health check
+  if (opts.healthCheck) {
+    console.log('\nHealth Check:');
+    const health = runHealthCheck();
+    console.log(`  ${health.db ? '✓' : '✗'} Node.js SQLite: ${health.db ? 'OK' : health.dbError}`);
+    console.log(`  ${health.embeddings ? '✓' : '✗'} Embeddings: ${health.embeddings ? 'OK (fastembed)' : health.embeddingError}`);
+  }
+
+  // 5. Next steps
+  console.log('\nDone! Mind Keg is ready. Open any project in your AI agent to start.\n');
+}
+
+/** Run the per-project init flow (--project flag). */
+function runProjectInit(opts: { agent?: string; instructions: boolean; healthCheck: boolean }): void {
+  const projectRoot = findProjectRoot();
+  console.log(`\nMind Keg — Initializing in ${projectRoot}\n`);
+
+  // 1. Determine target agents
+  let agents: Agent[];
+  if (opts.agent) {
+    const valid = Object.keys(AGENT_CONFIGS);
+    if (!valid.includes(opts.agent)) {
+      console.error(`Unknown agent "${opts.agent}". Valid options: ${valid.join(', ')}`);
+      process.exit(1);
+    }
+    agents = [opts.agent as Agent];
+  } else {
+    agents = detectAgents(projectRoot);
+    if (agents.length === 0) {
+      agents = ['claude-code'];
+      console.log('  No agent directories detected. Defaulting to Claude Code.\n');
+    } else {
+      console.log(`  Detected: ${agents.map(a => AGENT_CONFIGS[a].label).join(', ')}\n`);
+    }
+  }
+
+  // 2. Write MCP config for each agent
+  console.log('MCP Configuration:');
+  for (const agent of agents) {
+    const result = writeMcpConfig(projectRoot, agent);
+    if (result.created) {
+      console.log(`  ✓ ${AGENT_CONFIGS[agent].label}: wrote ${result.path}`);
+    } else {
+      console.log(`  - ${AGENT_CONFIGS[agent].label}: mindkeg already configured in ${result.path}`);
+    }
+  }
+
+  // 3. Copy agent instructions
+  if (opts.instructions) {
+    console.log('\nAgent Instructions:');
+    try {
+      const templatesDir = findTemplatesDir();
+      const firstAgent = agents[0] as Agent;
+      const result = writeAgentInstructions(projectRoot, firstAgent, templatesDir);
+      switch (result.action) {
+        case 'created':
+          console.log(`  ✓ Created ${result.path}`);
+          break;
+        case 'appended':
+          console.log(`  ✓ Appended Mind Keg instructions to ${result.path}`);
+          break;
+        case 'skipped':
+          console.log(`  - Mind Keg instructions already present in ${result.path}`);
+          break;
+      }
+    } catch (err) {
+      console.log(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 4. Health check
+  if (opts.healthCheck) {
+    console.log('\nHealth Check:');
+    const health = runHealthCheck();
+    console.log(`  ${health.db ? '✓' : '✗'} Node.js SQLite: ${health.db ? 'OK' : health.dbError}`);
+    console.log(`  ${health.embeddings ? '✓' : '✗'} Embeddings: ${health.embeddings ? 'OK (fastembed)' : health.embeddingError}`);
+  }
+
+  // 5. Next steps
+  console.log('\nNext steps:');
+  console.log('  1. Open your project in your AI agent (Claude Code, Cursor, etc.)');
+  console.log('  2. The agent will automatically connect to Mind Keg via MCP');
+  console.log('  3. Start coding — learnings are stored as you work\n');
+}
+
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
-    .description('Initialize Mind Keg in the current project')
+    .description('Initialize Mind Keg (global by default, --project for per-project setup)')
     .option('--agent <agent>', 'Target agent: claude-code, cursor, windsurf (auto-detects if omitted)')
-    .option('--no-instructions', 'Skip copying AGENTS.md / appending to CLAUDE.md')
+    .option('--project', 'Per-project setup instead of global', false)
+    .option('--no-instructions', 'Skip copying AGENTS.md / appending to CLAUDE.md (--project only)')
     .option('--no-health-check', 'Skip the health check')
-    .action(async (opts: { agent?: string; instructions: boolean; healthCheck: boolean }) => {
-      const projectRoot = findProjectRoot();
-      console.log(`\nMind Keg — Initializing in ${projectRoot}\n`);
-
-      // 1. Determine target agents
-      let agents: Agent[];
-      if (opts.agent) {
-        const valid = Object.keys(AGENT_CONFIGS);
-        if (!valid.includes(opts.agent)) {
-          console.error(`Unknown agent "${opts.agent}". Valid options: ${valid.join(', ')}`);
-          process.exit(1);
-        }
-        agents = [opts.agent as Agent];
+    .action(async (opts: { agent?: string; project: boolean; instructions: boolean; healthCheck: boolean }) => {
+      if (opts.project) {
+        runProjectInit(opts);
       } else {
-        agents = detectAgents(projectRoot);
-        if (agents.length === 0) {
-          // Default to claude-code if nothing detected
-          agents = ['claude-code'];
-          console.log('  No agent directories detected. Defaulting to Claude Code.\n');
-        } else {
-          console.log(`  Detected: ${agents.map(a => AGENT_CONFIGS[a].label).join(', ')}\n`);
-        }
+        runGlobalInit(opts);
       }
-
-      // 2. Write MCP config for each agent
-      console.log('MCP Configuration:');
-      for (const agent of agents) {
-        const result = writeMcpConfig(projectRoot, agent);
-        if (result.created) {
-          console.log(`  ✓ ${AGENT_CONFIGS[agent].label}: wrote ${result.path}`);
-        } else {
-          console.log(`  - ${AGENT_CONFIGS[agent].label}: mindkeg already configured in ${result.path}`);
-        }
-      }
-
-      // 3. Copy agent instructions
-      if (opts.instructions) {
-        console.log('\nAgent Instructions:');
-        try {
-          const templatesDir = findTemplatesDir();
-          // Write instructions for the first agent (avoid duplicating AGENTS.md)
-          const firstAgent = agents[0] as Agent;
-          const result = writeAgentInstructions(projectRoot, firstAgent, templatesDir);
-          switch (result.action) {
-            case 'created':
-              console.log(`  ✓ Created ${result.path}`);
-              break;
-            case 'appended':
-              console.log(`  ✓ Appended Mind Keg instructions to ${result.path}`);
-              break;
-            case 'skipped':
-              console.log(`  - Mind Keg instructions already present in ${result.path}`);
-              break;
-          }
-        } catch (err) {
-          console.log(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      // 4. Health check
-      if (opts.healthCheck) {
-        console.log('\nHealth Check:');
-        const health = runHealthCheck();
-        console.log(`  ${health.db ? '✓' : '✗'} Node.js SQLite: ${health.db ? 'OK' : health.dbError}`);
-        console.log(`  ${health.embeddings ? '✓' : '✗'} Embeddings: ${health.embeddings ? 'OK (fastembed)' : health.embeddingError}`);
-      }
-
-      // 5. Next steps
-      console.log('\nNext steps:');
-      console.log('  1. Open your project in your AI agent (Claude Code, Cursor, etc.)');
-      console.log('  2. The agent will automatically connect to Mind Keg via MCP');
-      console.log('  3. Start coding — learnings are stored as you work\n');
     });
 }

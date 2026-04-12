@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-04-12
+
+### Fixed
+- Always generate bash hook scripts on all platforms — Claude Code uses bash even on Windows, so PowerShell `.ps1` hooks caused "command not found" errors
+- Detect Claude Code multi-profile directories (`~/.claude-personal`, `~/.claude-work`, etc.) and install hooks in each profile automatically
+- Improved hook output format with explicit "Mind Keg Persistent Memory" header so agents correctly attribute the context source
+
 ## [0.7.0] - 2026-04-12
 
 ### Added

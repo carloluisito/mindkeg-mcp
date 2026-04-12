@@ -53,7 +53,9 @@ describe('generateHookConfig', () => {
     const hooks = config.hooks as Record<string, unknown>;
     const sessionStart = hooks.SessionStart as Array<{ hooks: Array<{ command: string; timeout: number }> }>;
     expect(sessionStart).toBeInstanceOf(Array);
-    expect(sessionStart[0].hooks[0].command).toBe('.claude/hooks/load-mindkeg.sh');
-    expect(sessionStart[0].hooks[0].timeout).toBe(10);
+    expect(sessionStart).toHaveLength(1);
+    const entry = sessionStart[0]!;
+    expect(entry.hooks[0]!.command).toBe('.claude/hooks/load-mindkeg.sh');
+    expect(entry.hooks[0]!.timeout).toBe(10);
   });
 });

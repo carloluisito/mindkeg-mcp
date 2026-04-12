@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-04-12
+
+### Added
+- **Auth-free stdio transport**: Local stdio connections no longer require API keys — the server uses a sentinel bypass so `npx mindkeg-mcp init` works with zero configuration
+- **Tool consolidation**: 22 tools collapsed into 8 primary tools (`get_context`, `store`, `update`, `resolve`, `complete_run`, `query`, `list_scopes`, `relate_learnings`) with self-describing descriptions that tell LLMs *when* to call each tool
+- **Auto-retrieval hook**: `init` generates a Claude Code `SessionStart` hook that loads mindkeg context automatically at the start of every session
+- **Global-first init**: `npx mindkeg-mcp init` now sets up mindkeg globally (one-time) instead of per-project; use `--project` for per-repo customization
+- **Hook script generators**: bash and PowerShell scripts for SessionStart auto-retrieval (`src/hooks/generate-hook.ts`)
+- 68 new tests (858 total)
+
+### Changed
+- **Minimal AGENTS.md**: 487-line tool reference replaced with 40-line behavioral contract — tool details are now in self-describing tool descriptions
+- MCP server version bumped to 0.7.0
+- `init` command no longer includes `MINDKEG_EMBEDDING_PROVIDER` in generated MCP config env (server defaults to fastembed)
+- 21 old tool names (`store_learning`, `search_learnings`, etc.) registered as backwards-compatible aliases — will be removed in next major version
+
 ## [0.6.1] - 2026-03-29
 
 ### Fixed

@@ -20,6 +20,7 @@ import { AuditLogger } from './audit/audit-logger.js';
 import { handleHealthCheck } from './monitoring/health.js';
 import { metricsRegistry, startDefaultMetricsCollection } from './monitoring/metrics.js';
 import { RateLimiter, classifyTool } from './security/rate-limiter.js';
+import { STDIO_LOCAL_SENTINEL } from './auth/middleware.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -117,7 +118,7 @@ function setupPurge(config: Config, storage: StorageAdapter): NodeJS.Timeout | n
 /**
  * Start the MCP server in stdio mode.
  * Used by local agents (Claude Code, Cursor) that spawn the server as a child process.
- * API key comes from the MINDKEG_API_KEY env variable (set in the MCP config).
+ * No API key is required for stdio transport — authentication is bypassed via STDIO_LOCAL_SENTINEL.
  */
 export async function startStdio(
   config: Config,
@@ -125,21 +126,13 @@ export async function startStdio(
   embedding: EmbeddingService
 ): Promise<void> {
   const log = getLogger();
-  const apiKey = config.auth.apiKey;
-
-  if (!apiKey) {
-    log.warn(
-      'MINDKEG_API_KEY is not set. All tool calls will be rejected with AuthError. ' +
-      'Set the key via: mindkeg api-key create, then set MINDKEG_API_KEY in your MCP config.'
-    );
-  }
 
   const auditLogger = new AuditLogger(config.audit.destination);
 
   const server = createMcpServer({
     storage,
     embedding,
-    getApiKey: () => apiKey,
+    getApiKey: () => STDIO_LOCAL_SENTINEL,
     auditLogger,
   });
 

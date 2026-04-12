@@ -37,23 +37,22 @@ Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre
 
 ## Quick Start
 
-### One-command setup
-
 ```bash
 npx mindkeg-mcp init
 ```
 
-This auto-detects your agent (Claude Code, Cursor, Windsurf), writes the MCP config, copies agent instructions, and runs a health check. That's it — open your agent and start coding.
+That's it. This installs Mind Keg globally for your AI agent (Claude Code, Cursor, Windsurf). Open any project and your agent has persistent memory -- no API keys, no per-project setup.
+
+For Claude Code, a SessionStart hook is also installed -- your agent loads prior knowledge automatically at the start of every session.
 
 **Options:**
 
 ```bash
-npx mindkeg-mcp init --agent cursor      # Target a specific agent
-npx mindkeg-mcp init --no-instructions   # Skip copying AGENTS.md
-npx mindkeg-mcp init --no-health-check   # Skip the health check
+npx mindkeg-mcp init --agent cursor    # Target a specific agent
+npx mindkeg-mcp init --project         # Per-project setup instead of global
 ```
 
-`init` is idempotent — safe to run multiple times. It merges with existing configs and never overwrites.
+`init` is idempotent -- safe to run multiple times. It merges with existing configs and never overwrites.
 
 ### Manual setup
 

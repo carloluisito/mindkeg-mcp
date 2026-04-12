@@ -44,3 +44,6 @@ local_cache/
 # Internal specs and plans (not published)
 specs/
 plans/
+
+# Git worktrees
+.claude/worktrees/

@@ -8,16 +8,19 @@ import {
   mindkegErrorsTotal,
   mindkegSearchLatencySeconds,
 } from '../monitoring/metrics.js';
+import { STDIO_LOCAL_SENTINEL } from '../auth/middleware.js';
 
 /**
  * Derive the audit actor string from an API key.
- * Returns the first 8 characters of the key as a non-sensitive prefix,
- * or "stdio" when no key is present (stdio transport without auth).
+ * - Returns "stdio-local" for the stdio sentinel key (local transport, no real key).
+ * - Returns the first 8 characters of the key as a non-sensitive prefix for real keys.
+ * - Returns "stdio" when no key is present.
  *
  * IMPORTANT: Never log the full API key (ESH-AC-9).
  */
 export function getActorFromApiKey(apiKey: string | undefined): string {
   if (!apiKey) return 'stdio';
+  if (apiKey === STDIO_LOCAL_SENTINEL) return 'stdio-local';
   // Use first 8 chars as prefix — enough to identify the key without exposing it
   return apiKey.slice(0, 8);
 }

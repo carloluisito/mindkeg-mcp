@@ -14,7 +14,9 @@ import {
 import {
   validateApiKey,
   checkRepositoryAccess,
+  STDIO_LOCAL_SENTINEL,
 } from '../../src/auth/middleware.js';
+import { getActorFromApiKey } from '../../src/tools/tool-utils.js';
 import { AuthError, AccessError } from '../../src/utils/errors.js';
 import type { StorageAdapter, ApiKeyRecord } from '../../src/storage/storage-adapter.js';
 
@@ -177,5 +179,50 @@ describe('checkRepositoryAccess', () => {
   it('throws AccessError when repo is not in key repositories list (AC-22)', () => {
     const ctx = { apiKey: makeApiKeyRecord({ repositories: ['/repo/a'] }) };
     expect(() => checkRepositoryAccess(ctx, '/repo/forbidden')).toThrow(AccessError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STDIO_LOCAL_SENTINEL tests
+// ---------------------------------------------------------------------------
+
+describe('validateApiKey with STDIO_LOCAL_SENTINEL', () => {
+  it('returns a synthetic unrestricted AuthContext without calling storage', async () => {
+    const storage = makeMockStorage(null);
+    const ctx = await validateApiKey(STDIO_LOCAL_SENTINEL, storage);
+
+    expect(ctx.apiKey.id).toBe('stdio-local');
+    expect(ctx.apiKey.name).toBe('stdio-local');
+    expect(ctx.apiKey.repositories).toEqual([]);
+    expect(ctx.apiKey.revoked).toBe(false);
+    expect(storage.getApiKeyByHash).not.toHaveBeenCalled();
+    expect(storage.touchApiKey).not.toHaveBeenCalled();
+  });
+
+  it('synthetic AuthContext passes checkRepositoryAccess for any repository', () => {
+    const storage = makeMockStorage(null);
+    // We need the AuthContext synchronously — build it directly
+    const syntheticCtx = {
+      apiKey: makeApiKeyRecord({ id: 'stdio-local', repositories: [] }),
+    };
+    expect(() => checkRepositoryAccess(syntheticCtx, '/any/repo')).not.toThrow();
+    expect(() => checkRepositoryAccess(syntheticCtx, null)).not.toThrow();
+    // storage is unused here, suppress the unused-variable lint by referencing it
+    void storage;
+  });
+});
+
+describe('getActorFromApiKey with STDIO_LOCAL_SENTINEL', () => {
+  it('returns "stdio-local" for the sentinel key', () => {
+    expect(getActorFromApiKey(STDIO_LOCAL_SENTINEL)).toBe('stdio-local');
+  });
+
+  it('returns "stdio" when apiKey is undefined', () => {
+    expect(getActorFromApiKey(undefined)).toBe('stdio');
+  });
+
+  it('returns an 8-char prefix for a normal API key', () => {
+    const key = 'mk_' + 'a'.repeat(64);
+    expect(getActorFromApiKey(key)).toBe(key.slice(0, 8));
   });
 });

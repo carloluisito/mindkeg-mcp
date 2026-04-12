@@ -8,7 +8,7 @@ This file provides persistent context for AI agents (Claude Code, Cursor, Windsu
 Mind Keg MCP is a TypeScript/Node.js MCP server that stores, searches, and retrieves atomic developer learnings.
 It is designed to give AI agents persistent memory across sessions.
 
-- **Version**: 0.6.1
+- **Version**: 0.7.0
 - **Runtime**: Node.js >= 22 (uses built-in `node:sqlite`)
 - **Transport**: stdio (local) + HTTP+SSE (remote)
 - **Storage**: SQLite via `node:sqlite` (`DatabaseSync` — synchronous)
@@ -336,19 +336,20 @@ Matrix: Ubuntu + Windows, Node.js 22.
 
 ### MCP Tools Exposed
 
+**8 consolidated tools (primary API):**
+
 | Tool | Description |
 |---|---|
-| store_learning | Store a new atomic learning |
-| search_learnings | Semantic/keyword search for relevant learnings |
-| update_learning | Update content, category, tags of a learning |
-| deprecate_learning | Mark a learning as deprecated |
-| flag_stale | Flag a learning as potentially outdated |
-| delete_learning | Permanently delete a learning |
-| list_repositories | List all repos with learning counts |
-| list_workspaces | List all workspaces with learning counts |
-| get_context | Prime an agent session with all relevant learnings — ranked, partitioned by scope, and budget-trimmed |
-| merge_learnings | Merge near-duplicate learnings into a canonical entry |
+| get_context | Retrieve relevant knowledge — session primer, task-scoped context, or semantic search (replaces get_context, get_relevant_context, search_learnings) |
+| store | Save knowledge — learning, decision, finding, or gotcha (replaces store_learning, store_decision, store_finding, store_gotcha) |
+| update | Modify/manage knowledge — update, deprecate, flag_stale, delete, or merge (replaces update_learning, deprecate_learning, flag_stale, delete_learning, merge_learnings) |
+| resolve | Close out a decision or finding (replaces supersede_decision, resolve_finding) |
+| complete_run | Record a completed work session |
+| query | List knowledge by type — decisions, findings, gotchas, or runs (replaces get_decisions, get_open_findings, get_gotchas, get_run_history) |
+| list_scopes | List repositories and workspaces with counts (replaces list_repositories, list_workspaces) |
 | relate_learnings | Create typed relationships between learnings |
+
+**21 backwards-compatible aliases:** All old tool names (store_learning, search_learnings, etc.) are registered as aliases that delegate to the same service methods. Aliases will be removed in the next major version.
 
 ### Data Model
 

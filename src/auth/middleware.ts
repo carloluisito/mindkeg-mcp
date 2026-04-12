@@ -12,7 +12,16 @@ export interface AuthContext {
 }
 
 /**
+ * Sentinel key value for local stdio transport.
+ * When this value is passed as the API key, authentication is bypassed entirely —
+ * no database lookup is performed and a synthetic unrestricted AuthContext is returned.
+ * This sentinel is ONLY passed by startStdio() and never accepted over HTTP.
+ */
+export const STDIO_LOCAL_SENTINEL = '__stdio_local__';
+
+/**
  * Validate an API key string against the database.
+ * - Recognises STDIO_LOCAL_SENTINEL and short-circuits with a synthetic AuthContext (no DB call)
  * - Hashes the provided key and looks it up in storage
  * - Checks that the key is not revoked (AC-21, AC-23)
  * - Updates last_used_at timestamp
@@ -23,6 +32,21 @@ export async function validateApiKey(
   rawKey: string | undefined,
   storage: StorageAdapter
 ): Promise<AuthContext> {
+  // Bypass auth for local stdio transport — no DB lookup needed
+  if (rawKey === STDIO_LOCAL_SENTINEL) {
+    const syntheticRecord: ApiKeyRecord = {
+      id: 'stdio-local',
+      name: 'stdio-local',
+      key_hash: '',
+      key_prefix: '',
+      repositories: [], // empty = all-access
+      revoked: false,
+      created_at: new Date().toISOString(),
+      last_used_at: null,
+    };
+    return { apiKey: syntheticRecord };
+  }
+
   if (!rawKey || rawKey.trim() === '') {
     throw new AuthError('API key is required. Pass it via the MINDKEG_API_KEY environment variable (stdio) or Authorization: Bearer <key> header (HTTP).');
   }

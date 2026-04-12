@@ -188,8 +188,8 @@ describe('writeAgentInstructions', () => {
     expect(result.path).toBe(join(dir, 'AGENTS.md'));
 
     const content = readFileSync(result.path, 'utf-8');
-    expect(content).toContain('Mind Keg');
-    expect(content).toContain('store_learning');
+    expect(content).toContain('Mind Keg -- Agent Instructions');
+    expect(content).toContain('get_context');
   });
 
   it('appends to existing CLAUDE.md for claude-code agent', () => {
@@ -243,22 +243,21 @@ describe('writeAgentInstructions', () => {
     expect(result2.action).toBe('skipped');
   });
 
-  it('created AGENTS.md contains all 8 tool references', () => {
+  it('created AGENTS.md contains behavioral contract keywords', () => {
     writeAgentInstructions(dir, 'cursor', TEMPLATES_DIR);
     const content = readFileSync(join(dir, 'AGENTS.md'), 'utf-8');
 
-    const tools = [
-      'store_learning',
-      'search_learnings',
-      'update_learning',
-      'deprecate_learning',
-      'flag_stale',
-      'delete_learning',
-      'list_repositories',
-      'list_workspaces',
+    const keywords = [
+      'Session Start',
+      'During Work',
+      'Session End',
+      'get_context',
+      'store',
+      'complete_run',
+      'Always ask before storing',
     ];
-    for (const tool of tools) {
-      expect(content).toContain(tool);
+    for (const keyword of keywords) {
+      expect(content).toContain(keyword);
     }
   });
 });

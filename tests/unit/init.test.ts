@@ -12,6 +12,8 @@ import {
   writeAgentInstructions,
   writeGlobalMcpConfig,
   writeGlobalHook,
+  writeHookToDir,
+  detectClaudeProfiles,
   ensureDatabase,
 } from '../../cli/commands/init.js';
 
@@ -264,6 +266,13 @@ describe('writeGlobalHook', () => {
     expect(result).toBeNull();
   });
 
+  it('always creates a .sh hook script, never .ps1', () => {
+    const result = writeGlobalHook(dir, 'claude-code');
+    expect(result).not.toBeNull();
+    expect(result!.path).toMatch(/load-mindkeg\.sh$/);
+    expect(result!.path).not.toContain('.ps1');
+  });
+
   it('creates hook script for claude-code', () => {
     const result = writeGlobalHook(dir, 'claude-code');
     expect(result).not.toBeNull();
@@ -308,6 +317,112 @@ describe('writeGlobalHook', () => {
     const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8'));
     expect(settings.existingKey).toBe('value');
     expect(settings.hooks.SessionStart).toBeDefined();
+  });
+
+  it('hook command uses bash prefix with forward slashes', () => {
+    writeGlobalHook(dir, 'claude-code');
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8'));
+    const sessionStart = settings.hooks.SessionStart as Array<{ hooks: Array<{ command: string }> }>;
+    const command = sessionStart[0]!.hooks[0]!.command;
+    expect(command).toMatch(/^bash /);
+    expect(command).not.toContain('\\');
+    expect(command).toContain('/');
+    expect(command).toContain('load-mindkeg.sh');
+  });
+});
+
+describe('detectClaudeProfiles', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns empty array when no profile directories exist', () => {
+    expect(detectClaudeProfiles(dir)).toEqual([]);
+  });
+
+  it('detects .claude-personal with settings.json', () => {
+    const profileDir = join(dir, '.claude-personal');
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(join(profileDir, 'settings.json'), '{}', 'utf-8');
+
+    expect(detectClaudeProfiles(dir)).toEqual(['.claude-personal']);
+  });
+
+  it('detects multiple profiles', () => {
+    for (const name of ['.claude-personal', '.claude-work']) {
+      const profileDir = join(dir, name);
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(join(profileDir, 'settings.json'), '{}', 'utf-8');
+    }
+
+    const profiles = detectClaudeProfiles(dir);
+    expect(profiles).toContain('.claude-personal');
+    expect(profiles).toContain('.claude-work');
+    expect(profiles).toHaveLength(2);
+  });
+
+  it('ignores .claude-worktrees', () => {
+    const worktreeDir = join(dir, '.claude-worktrees');
+    mkdirSync(worktreeDir, { recursive: true });
+    writeFileSync(join(worktreeDir, 'settings.json'), '{}', 'utf-8');
+
+    expect(detectClaudeProfiles(dir)).toEqual([]);
+  });
+
+  it('ignores profile dirs without settings.json', () => {
+    mkdirSync(join(dir, '.claude-personal'), { recursive: true });
+    // No settings.json
+
+    expect(detectClaudeProfiles(dir)).toEqual([]);
+  });
+
+  it('ignores directories not starting with .claude-', () => {
+    const otherDir = join(dir, '.some-other-dir');
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(join(otherDir, 'settings.json'), '{}', 'utf-8');
+
+    expect(detectClaudeProfiles(dir)).toEqual([]);
+  });
+});
+
+describe('writeHookToDir', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('writes hook script and settings to specified paths', () => {
+    const hookDir = join(dir, 'hooks');
+    const settingsPath = join(dir, 'settings.json');
+
+    const result = writeHookToDir(hookDir, settingsPath);
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(join(hookDir, 'load-mindkeg.sh'));
+    expect(existsSync(result.path)).toBe(true);
+    expect(existsSync(settingsPath)).toBe(true);
+  });
+
+  it('does not duplicate on repeated calls', () => {
+    const hookDir = join(dir, 'hooks');
+    const settingsPath = join(dir, 'settings.json');
+
+    writeHookToDir(hookDir, settingsPath);
+    const result2 = writeHookToDir(hookDir, settingsPath);
+    expect(result2.created).toBe(false);
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(settings.hooks.SessionStart).toHaveLength(1);
   });
 });
 

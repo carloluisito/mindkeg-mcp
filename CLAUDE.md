@@ -169,7 +169,7 @@ tests/
 - Internal imports third with `.js` extension (required for ESM: `./tools/store-learning.js`)
 
 ### Module Organization
-- One MCP tool per file in `src/tools/`
+- MCP tools organized under `src/tools/`: 8 consolidated tools in `consolidated/` subdirectory (primary API), 19 legacy tool files at the top level (backwards-compatible aliases)
 - Each tool file exports a `register*` function that takes `(server, learningService, storage, getApiKey)`
 - Services hold business logic; tools are thin wrappers that parse input, call service, format response
 - Storage adapter is interface-based for backend swappability
@@ -348,7 +348,7 @@ Matrix: Ubuntu + Windows, Node.js 22.
 | list_scopes | List repositories and workspaces with counts (replaces list_repositories, list_workspaces) |
 | relate_learnings | Create typed relationships between learnings |
 
-**21 backwards-compatible aliases:** All old tool names (store_learning, search_learnings, etc.) are registered as aliases that delegate to the same service methods. Aliases will be removed in the next major version.
+**19 backwards-compatible aliases:** All old tool names (store_learning, search_learnings, etc.) are registered as aliases that delegate to the same service methods. Aliases will be removed in the next major version.
 
 ### Data Model
 

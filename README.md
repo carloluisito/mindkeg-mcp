@@ -29,7 +29,7 @@ Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre
 - Free-form tags and group linking
 - Three scoping levels: repository-specific, workspace-wide, and global learnings
 - Dual transport: stdio (local) + HTTP+SSE (remote)
-- API key authentication with per-repository access control
+- Auth-free stdio for local use; API key authentication with per-repository access control for HTTP
 - SQLite storage (zero dependencies, zero config)
 - Import/export for backup and migration
 - **Smarter knowledge management**: auto-categorization (KNN voting), conflict detection, smart staleness scoring, access tracking with relevance decay, near-duplicate merging, typed learning relationships
@@ -67,13 +67,15 @@ If you prefer to configure manually, or need HTTP mode:
 npm install -g mindkeg-mcp
 ```
 
-#### Create an API key
+#### Create an API key (only needed for HTTP mode)
 
 ```bash
 mindkeg api-key create --name "My Laptop"
 # Displays the key ONCE — save it securely
 # mk_abc123...
 ```
+
+> API keys are only required for HTTP transport. stdio transport (used by Claude Code, Cursor, Windsurf local setups) is auth-free.
 
 #### Connect your AI agent
 
@@ -153,46 +155,28 @@ Copy `templates/AGENTS.md` to the root of any repository where you want agents t
 
 ## MCP Tools
 
-### Learnings
+**8 consolidated tools (primary API):**
 
-| Tool                 | Description                                          |
-|----------------------|------------------------------------------------------|
-| `get_context`        | Prime an agent session with all relevant learnings — ranked, scoped, and budget-controlled |
-| `store_learning`     | Store a new atomic learning (repo, workspace, or global scope) |
-| `search_learnings`   | Semantic/keyword search for relevant learnings       |
-| `update_learning`    | Update content, category, or tags                    |
-| `deprecate_learning` | Mark a learning as deprecated                        |
-| `flag_stale`         | Flag a learning as potentially outdated               |
-| `delete_learning`    | Permanently delete a learning                        |
-| `merge_learnings`    | Merge near-duplicate learnings into a canonical entry |
-| `relate_learnings`   | Create typed relationships between learnings          |
-| `list_repositories`  | List all repositories with learning counts           |
-| `list_workspaces`    | List all workspaces with learning counts             |
+| Tool | Description |
+|---|---|
+| `get_context` | Retrieve relevant knowledge — session primer, task-scoped context, or semantic search (replaces `get_context`, `get_relevant_context`, `search_learnings`) |
+| `store` | Save knowledge — learning, decision, finding, or gotcha (replaces `store_learning`, `store_decision`, `store_finding`, `store_gotcha`) |
+| `update` | Modify/manage knowledge — update, deprecate, flag_stale, delete, or merge (replaces `update_learning`, `deprecate_learning`, `flag_stale`, `delete_learning`, `merge_learnings`) |
+| `resolve` | Close out a decision or finding (replaces `supersede_decision`, `resolve_finding`) |
+| `complete_run` | Record a completed work session |
+| `query` | List knowledge by type — decisions, findings, gotchas, or runs (replaces `get_decisions`, `get_open_findings`, `get_gotchas`, `get_run_history`) |
+| `list_scopes` | List repositories and workspaces with counts (replaces `list_repositories`, `list_workspaces`) |
+| `relate_learnings` | Create typed relationships between learnings |
 
-### Agent Memory Entities
-
-Structured entity types for capturing decisions, findings, gotchas, and run summaries — richer than atomic learnings, designed for cross-session agent memory.
-
-| Tool                   | Description                                          |
-|------------------------|------------------------------------------------------|
-| `store_decision`       | Record an architectural or design decision with rationale |
-| `get_decisions`        | Retrieve decisions for a repository, optionally filtered by status |
-| `supersede_decision`   | Mark a decision as superseded by a newer one         |
-| `store_finding`        | Record a bug, issue, or investigation finding         |
-| `get_open_findings`    | Retrieve unresolved findings for a repository         |
-| `resolve_finding`      | Mark a finding as resolved with a resolution summary  |
-| `store_gotcha`         | Record a non-obvious pitfall or gotcha                |
-| `get_gotchas`          | Retrieve gotchas for a repository                     |
-| `get_relevant_context` | Retrieve all entity types relevant to a repository    |
-| `get_run_history`      | Retrieve run summaries for a repository               |
-| `complete_run`         | Record the completion of an agent run with a summary  |
+**Backwards-compatible aliases:** All 19 old tool names (`store_learning`, `search_learnings`, `update_learning`, `deprecate_learning`, `flag_stale`, `delete_learning`, `merge_learnings`, `store_decision`, `get_decisions`, `supersede_decision`, `store_finding`, `resolve_finding`, `get_open_findings`, `store_gotcha`, `get_gotchas`, `get_run_history`, `get_relevant_context`, `list_repositories`, `list_workspaces`) are registered as aliases that delegate to the same service methods. They will be removed in the next major version.
 
 ## CLI Commands
 
 ```bash
-# Quick setup (auto-detects agent, writes config, copies instructions)
+# Global setup (one-time) — writes MCP config, SessionStart hook, runs migrations
 mindkeg init
-mindkeg init --agent cursor
+mindkeg init --agent cursor    # Target a specific agent (default: claude-code)
+mindkeg init --project         # Per-project setup instead of global (optional)
 
 # Database statistics
 mindkeg stats
@@ -471,6 +455,7 @@ src/
   audit/            Structured JSON lines audit logger
   auth/             API key generation + validation middleware
   crypto/           AES-256-GCM field encryption
+  hooks/            Hook script generation (SessionStart auto-retrieval)
   monitoring/       Prometheus metrics + /health endpoint
   security/         Content sanitization, integrity hashing, rate limiter
   tools/            MCP tool handlers (8 consolidated + 19 backwards-compatible aliases)

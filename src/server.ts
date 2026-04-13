@@ -50,6 +50,49 @@ import { registerGetRelevantContext } from './tools/get-relevant-context.js';
 import type { AuditLogger } from './audit/audit-logger.js';
 import { createNoopAuditLogger } from './audit/audit-logger.js';
 
+/**
+ * MCP server instructions — the behavioral contract delivered to every MCP client
+ * at handshake (via the `initialize` response's `instructions` field).
+ *
+ * This is the primary delivery mechanism for mindkeg's proactive storage workflow.
+ * It reaches every MCP-compliant client (Claude Code, Cursor, Windsurf, Codex, Gemini CLI)
+ * once per connection, regardless of hook or resource support.
+ *
+ * Traces to: docs/design/2026-04-13-agent-instruction-delivery-design.md Section 1.
+ */
+export const MINDKEG_SERVER_INSTRUCTIONS = `You have access to Mind Keg — a persistent memory system for knowledge that survives across sessions. Use it to retrieve prior context and proactively preserve new insights.
+
+# When to retrieve
+
+At session start, call \`get_context({ repository: "<current repo path>" })\` to load prior knowledge. If the SessionStart hook already injected context (visible as "Mind Keg Persistent Memory" at the top of the conversation), skip this — the context is already loaded.
+
+For topic-specific lookups mid-session, call \`get_context({ query: "<topic>", repository: "<path>" })\`.
+
+# When to store (proactively offer)
+
+When you discover something non-obvious during work, pause and offer to save it:
+
+> "I noticed [X]. This looks like a [gotcha/decision/finding]. Want me to save it to Mind Keg?
+>  Scope: this repo, this workspace, or globally?"
+
+Wait for the user's answer before calling \`store\`.
+
+Watch for these patterns specifically:
+
+- **Gotchas** — non-obvious behaviors, footguns, surprising library quirks → \`store({ type: "gotcha", ... })\`
+- **Architectural decisions** with rationale → \`store({ type: "decision", ... })\`
+- **Code review findings** that need tracking across sessions → \`store({ type: "finding", ... })\`
+- **Short factual insights** (conventions, debugging tips, compact observations) → \`store({ type: "learning", ... })\`
+
+# Rules
+
+- Always ask before storing. Never store silently.
+- Don't store transient session state, obvious facts, or codebase-specific details that change as code evolves (file paths, function locations). Those belong in project-level memory, not Mind Keg.
+- Prefer \`update({ action: "deprecate" })\` over delete for wrong knowledge — preserves audit trail.
+- Use \`update({ action: "flag_stale" })\` when you suspect something is outdated but aren't sure.
+- For scope, ask the user; default suggestion: this repo unless the insight clearly applies cross-project.
+- At session end, if you made multiple discoveries, summarize them and offer to save the ones the user wants to keep.`;
+
 export interface ServerDependencies {
   storage: StorageAdapter;
   embedding: EmbeddingService;
@@ -78,6 +121,7 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
       capabilities: {
         tools: {},
       },
+      instructions: MINDKEG_SERVER_INSTRUCTIONS,
     }
   );
 

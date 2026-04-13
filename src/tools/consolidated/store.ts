@@ -111,7 +111,7 @@ export function registerConsolidatedStore(
 ): void {
   server.tool(
     'store',
-    'Save a piece of knowledge. Types: learning (short insight, max 500 chars), decision (architectural choice with rationale), finding (code review issue), gotcha (non-obvious behavior). Before calling this, ask the user if they want to save it and which scope — this repo, workspace, or global.',
+    'Save a piece of knowledge when you discover something worth preserving across sessions. Call this proactively when you encounter: a gotcha (non-obvious behavior), an architectural decision with rationale, a code review finding, or a short factual insight (conventions, debugging tips). Always ask the user first — e.g., "I noticed X, want me to save this to Mind Keg?" — and confirm scope (this repo / workspace / global) before calling.',
     {
       type: z.enum(['learning', 'decision', 'finding', 'gotcha']).describe('Type of knowledge to store.'),
       repository: z.string().optional().nullable().describe('Repository path. Required for decision, finding, gotcha. Optional for learning.'),

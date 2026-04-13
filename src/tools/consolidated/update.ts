@@ -66,7 +66,7 @@ export function registerConsolidatedUpdate(
 ): void {
   server.tool(
     'update',
-    'Modify or manage existing knowledge. Actions: update (change content/tags), deprecate (mark outdated — preferred over delete), flag_stale (soft flag when unsure), delete (permanent), merge (consolidate duplicates). Use deprecate when you discover a stored learning is wrong. Use flag_stale when you\'re unsure.',
+    'Modify or manage existing knowledge. Actions: update (change content/tags), deprecate (mark outdated — preferred over delete), flag_stale (soft flag when unsure), delete (permanent), merge (consolidate duplicates). When you find a stored learning that contradicts current reality, proactively offer to deprecate or flag it. Use deprecate when certain, flag_stale when unsure.',
     {
       action: z.enum(['update', 'deprecate', 'flag_stale', 'delete', 'merge']).describe('Action to perform.'),
       id: z.string().uuid().describe('Target learning ID.'),

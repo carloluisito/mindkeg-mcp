@@ -100,3 +100,18 @@ describe('registerConsolidatedUpdate', () => {
     expect(typeof mod.registerConsolidatedUpdate).toBe('function');
   });
 });
+
+describe('update tool description', () => {
+  it('contains proactive deprecation cue', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, resolve } = await import('node:path');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'src', 'tools', 'consolidated', 'update.ts'),
+      'utf-8'
+    );
+
+    expect(source).toContain('proactively offer to deprecate or flag it');
+  });
+});

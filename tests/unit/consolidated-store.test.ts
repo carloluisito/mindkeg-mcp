@@ -169,3 +169,20 @@ describe('validateStoreInput', () => {
     expect(validateStoreInput(input)).toEqual(input);
   });
 });
+
+describe('store tool description', () => {
+  it('contains proactive storage cues', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, resolve } = await import('node:path');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', 'src', 'tools', 'consolidated', 'store.ts'),
+      'utf-8'
+    );
+
+    expect(source).toContain('Call this proactively');
+    expect(source).toContain('Always ask the user first');
+    expect(source).toContain('scope (this repo / workspace / global)');
+  });
+});

@@ -22,7 +22,7 @@ import { registerSetupCommand } from './commands/setup.js';
 program
   .name('mindkeg')
   .description('Mind Keg MCP — persistent memory for AI coding agents')
-  .version('0.5.0');
+  .version('0.7.1');
 
 registerServeCommand(program);
 registerApiKeyCommand(program);

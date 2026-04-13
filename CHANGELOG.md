@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-04-13
+
+### Added
+- **MCP server `instructions`**: The behavioral contract (when to retrieve, when to proactively offer to store, scope question, never-store-silently rule) is now delivered to every MCP client at handshake via the `initialize` response's `instructions` field — universal across Claude Code, Cursor, Windsurf, Codex, Gemini CLI, and any MCP-compliant client
+- Exported `MINDKEG_SERVER_INSTRUCTIONS` constant for programmatic access to the contract text
+
+### Changed
+- **`store` tool description**: Enhanced with proactive cues — "Call this proactively" and explicit instructions to ask the user first with scope question (repo / workspace / global)
+- **`update` tool description**: Enhanced with proactive deprecation cue — when finding a stored learning that contradicts current reality, proactively offer to deprecate or flag it
+
 ## [0.7.1] - 2026-04-12
 
 ### Fixed
